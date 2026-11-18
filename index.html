@@ -38,6 +38,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-f
 #dogbar { position: absolute; right: 12px; top: 12px; display: flex; flex-direction: column; gap: 6px; pointer-events: auto; }
 .dogchip { font-size: 10px; padding: 8px 12px 8px 8px; display: flex; align-items: center; gap: 8px; background: rgba(16,20,60,.75); border: 2px solid rgba(255,255,255,.35); border-radius: 4px; cursor: pointer; color: #cfd4ff; }
 .dogchip.sel { background: rgba(60,70,190,.92); border-color: #ffd84a; color: #fff; }
+.dogchip .fz { width: 14px; height: 6px; border-radius: 50%; display: inline-block; border: 2px solid #fff; margin-left: 4px; }
+body.night .win { background: linear-gradient(180deg, rgba(70,40,150,.92), rgba(24,12,70,.92)); border-color: #e6dcff; }
+body.night .dogchip { background: rgba(30,16,70,.8); }
+body.night .dogchip.sel { background: rgba(90,50,190,.92); }
+body.night #lvlnum { color: #c9b8ff; }
+#ending .nc { color: #7affb0; letter-spacing: 3px; }
 .dogchip .sw { width: 16px; height: 16px; border: 3px solid; border-radius: 3px; display: inline-block; }
 #hintbox { position: absolute; left: 50%; transform: translateX(-50%); bottom: 14px; width: min(760px, 94vw); padding: 12px 16px; font-size: 10px; line-height: 1.8; }
 #hintbox .k { color: #ffd84a; }
@@ -128,8 +134,8 @@ body.touch #keys { display: none; }
 </div></div>
 
 <div id="ending" class="dlg"><div class="win">
-  <h2>THE END!</h2>
-  <div class="credits">All twenty bowls found! <b>Bear</b>, <b>Louise</b>, <b>Oatie</b> &amp; <b>Gerty Boots</b><br>are full, happy and very good dogs. Thanks for playing!</div>
+  <h2 id="endtitle">THE END!</h2>
+  <div class="credits" id="endtext"></div>
   <button class="btn" id="endbtn">BACK TO TITLE</button>
 </div></div>
 
@@ -197,6 +203,7 @@ class Mesh extends Object3D { constructor(g, m) { super(); this.geometry = g; th
 class Sprite extends Object3D { constructor(m) { super(); this.material = m; this.isSprite = true; } }
 class Fog { constructor(c, near, far) { this.color = new Color(c); this.near = near; this.far = far; } }
 class HemisphereLight extends Object3D { constructor(s, g, i) { super(); this.isHemi = true; this.sky = new Color(s); this.ground = new Color(g); this.intensity = i; } }
+class PointLight extends Object3D { constructor(c, i = 1, d = 3) { super(); this.isPoint = true; this.color = new Color(c); this.intensity = i; this.distance = d; } }
 class DirectionalLight extends Object3D { constructor(c, i) { super(); this.isDir = true; this.color = new Color(c); this.intensity = i; } }
 class PerspectiveCamera extends Object3D {
   constructor(fov, aspect, near, far) { super(); this.fov = fov; this.aspect = aspect; this.near = near; this.far = far; this.proj = new Float32Array(16); this.view = new Float32Array(16); this.axes = [new Vector3(), new Vector3(), new Vector3()]; this.updateProjectionMatrix(); this.lookAt(new Vector3(0, 0, -1)); }
@@ -304,7 +311,7 @@ const NearestFilter = 1, RepeatWrapping = 1, ClampToEdgeWrapping = 2, RGBAFormat
 class Texture { constructor(img) { this.image = img; this.needsUpdate = true; this.wrapS = this.wrapT = ClampToEdgeWrapping; this.flipY = true; this.gl = null; } }
 class CanvasTexture extends Texture {}
 class DataTexture extends Texture { constructor(data, w, h) { super({ data, width: w, height: h }); this.flipY = false; } }
-class Material { constructor(o = {}) { this.color = new Color(o.color ?? 0xffffff); this.map = o.map || null; this.transparent = !!o.transparent; this.opacity = o.opacity ?? 1; this.depthWrite = o.depthWrite ?? true; this.depthTest = o.depthTest ?? true; this.side = o.side || 0; this.lit = false; } }
+class Material { constructor(o = {}) { this.color = new Color(o.color ?? 0xffffff); this.map = o.map || null; this.transparent = !!o.transparent; this.opacity = o.opacity ?? 1; this.depthWrite = o.depthWrite ?? true; this.depthTest = o.depthTest ?? true; this.side = o.side || 0; this.lit = false; this.fog = o.fog ?? true; this.blending = o.blending || 'normal'; } }
 class MeshLambertMaterial extends Material { constructor(o) { super(o); this.lit = true; } }
 class MeshBasicMaterial extends Material {}
 class SpriteMaterial extends Material { constructor(o) { super(o); this.transparent = true; } }
@@ -313,26 +320,36 @@ class SpriteMaterial extends Material { constructor(o) { super(o); this.transpar
 const VS = `attribute vec3 position; attribute vec3 normal; attribute vec2 uv;
 uniform mat4 model, view, proj; uniform mat3 nmat; uniform vec2 snap; uniform float lit;
 uniform vec3 hSky, hGround, dCol, dDir; uniform vec2 fogR;
+uniform vec3 pPos[4]; uniform vec3 pCol[4]; uniform float pRad[4];
 varying vec3 vL; varying vec2 vUvW; varying float vW; varying float vFog;
 void main(){
-  vec4 vp = view * model * vec4(position, 1.0);
+  vec4 wp = model * vec4(position, 1.0);
+  vec4 vp = view * wp;
   vec4 cp = proj * vp;
   vec4 sp = cp; sp.xyz /= sp.w; sp.xy = floor(sp.xy * snap + 0.5) / snap; sp.xyz *= sp.w;
   gl_Position = sp;
   vec3 n = normalize(nmat * normal);
-  vL = lit > 0.5 ? mix(hGround, hSky, n.y * 0.5 + 0.5) + dCol * max(dot(n, dDir), 0.0) : vec3(1.0);
+  vL = vec3(1.0);
+  if (lit > 0.5) {
+    vL = mix(hGround, hSky, n.y * 0.5 + 0.5) + dCol * max(dot(n, dDir), 0.0);
+    for (int i = 0; i < 4; i++) {
+      vec3 L = pPos[i] - wp.xyz; float d = length(L);
+      float a = max(0.0, 1.0 - d / max(pRad[i], 0.001)); a *= a;
+      vL += pCol[i] * a * (0.35 + 0.65 * max(dot(n, L / max(d, 0.001)), 0.0));
+    }
+  }
   vUvW = uv * cp.w; vW = cp.w;
   vFog = clamp((length(vp.xyz) - fogR.x) / (fogR.y - fogR.x), 0.0, 1.0);
 }`;
 const FS = `precision mediump float;
-uniform sampler2D map; uniform float useMap; uniform vec3 color; uniform float opacity; uniform vec3 fogC;
+uniform sampler2D map; uniform float useMap; uniform vec3 color; uniform float opacity; uniform vec3 fogC; uniform float useFog;
 varying vec3 vL; varying vec2 vUvW; varying float vW; varying float vFog;
 void main(){
   vec4 c = vec4(color, opacity);
   if (useMap > 0.5) c *= texture2D(map, vUvW / vW);
   if (c.a < 0.02) discard;
   c.rgb *= vL;
-  c.rgb = mix(c.rgb, fogC, vFog);
+  c.rgb = mix(c.rgb, fogC, vFog * useFog);
   gl_FragColor = c;
 }`;
 const PVS = `attribute vec3 position; varying vec2 vUv; void main(){ vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
@@ -410,13 +427,14 @@ class WebGLRenderer {
     gl.enable(gl.DEPTH_TEST); gl.useProgram(P.p);
     for (let i = 0; i < 3; i++) gl.enableVertexAttribArray(i);
     // lights
-    let hs = [0, 0, 0], hg = [0, 0, 0], dc = [0, 0, 0], dd = [0, 1, 0];
+    let hs = [0, 0, 0], hg = [0, 0, 0], dc = [0, 0, 0], dd = [0, 1, 0]; const pts = [];
     const opaque = [], trans = [];
     const I = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
     const walk = (o, pm) => {
       if (!o.visible) return;
       compose(o.local, o.position, o.rotation, o.scale); mul(o.world, pm, o.local);
       if (o.isHemi) { hs = [o.sky.r * o.intensity, o.sky.g * o.intensity, o.sky.b * o.intensity]; hg = [o.ground.r * o.intensity, o.ground.g * o.intensity, o.ground.b * o.intensity]; }
+      else if (o.isPoint) { pts.push(o); }
       else if (o.isDir) { dc = [o.color.r * o.intensity, o.color.g * o.intensity, o.color.b * o.intensity]; const l = o.position.length() || 1; dd = [o.position.x / l, o.position.y / l, o.position.z / l]; }
       else if (o.material) {
         const tr = (Array.isArray(o.material) ? o.material[0] : o.material).transparent;
@@ -427,6 +445,9 @@ class WebGLRenderer {
     walk(scene, I);
     gl.uniformMatrix4fv(u.view, false, cam.view); gl.uniformMatrix4fv(u.proj, false, cam.proj);
     gl.uniform2fv(u.snap, this.snap);
+    const pp = new Float32Array(12), pc = new Float32Array(12), pr = new Float32Array(4);
+    pts.slice(0, 4).forEach((p, i) => { pp.set([p.world[12], p.world[13], p.world[14]], i * 3); pc.set([p.color.r * p.intensity, p.color.g * p.intensity, p.color.b * p.intensity], i * 3); pr[i] = p.distance; });
+    gl.uniform3fv(u.pPos, pp); gl.uniform3fv(u.pCol, pc); gl.uniform1fv(u.pRad, pr);
     gl.uniform3fv(u.hSky, hs); gl.uniform3fv(u.hGround, hg); gl.uniform3fv(u.dCol, dc); gl.uniform3fv(u.dDir, dd);
     const fog = scene.fog;
     gl.uniform2f(u.fogR, fog ? fog.near : 1e5, fog ? fog.far : 2e5);
@@ -449,7 +470,8 @@ class WebGLRenderer {
       for (const gr of g.groups) {
         const m = mats ? mats[gr.mi] : o.material; if (!m) continue;
         gl.uniform3f(u.color, m.color.r, m.color.g, m.color.b); gl.uniform1f(u.opacity, m.opacity);
-        gl.uniform1f(u.lit, m.lit ? 1 : 0);
+        gl.uniform1f(u.lit, m.lit ? 1 : 0); gl.uniform1f(u.useFog, m.fog ? 1 : 0);
+        if (m.blending === 'add') gl.blendFunc(gl.SRC_ALPHA, gl.ONE); else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         if (m.map) { this.tex(m.map); gl.uniform1f(u.useMap, 1); } else gl.uniform1f(u.useMap, 0);
         if (m.side === DoubleSide || o.isSprite) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
         gl.depthMask(m.depthWrite); if (m.depthTest) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
@@ -476,7 +498,7 @@ class WebGLRenderer {
 }
 
 root.THREE = {
-  Vector2, Vector3, Color, MathUtils, Object3D, Group, Scene, Mesh, Sprite, Fog, HemisphereLight, DirectionalLight, PerspectiveCamera,
+  Vector2, Vector3, Color, MathUtils, Object3D, Group, Scene, Mesh, Sprite, Fog, HemisphereLight, DirectionalLight, PointLight, PerspectiveCamera,
   BoxGeometry, PlaneGeometry, ConeGeometry, CylinderGeometry, OctahedronGeometry, TorusGeometry, SphereGeometry,
   CanvasTexture, DataTexture, MeshLambertMaterial, MeshBasicMaterial, SpriteMaterial, WebGLRenderer,
   NearestFilter, RepeatWrapping, ClampToEdgeWrapping, RGBAFormat, DoubleSide,
@@ -495,20 +517,22 @@ root.THREE = {
     { key: 'g', name: 'Gerty Boots', size: 1 },
   ];
   const DIRS = [[0, -1], [1, 0], [0, 1], [-1, 0]]; // up right down left
+  const NONE = -99;                                // frisbee not in level
+  const FRIS = ['orange', 'blue'];
+  const rules = { ridePush: true, carry: true, teleport: true };
 
-  // Parse a level definition into a state.
-  // map chars: . grass, o hole, T hedge, 1-4 rock height, x/X/Y/Z crate stacks 1-4,
-  // B bowl, b l e g dogs. lv.rock: [[x,y,h]] sets rock under any cell.
+  // map chars: . grass, o hole, T hedge, _ meadow, 1-4 rock, x X Y Z crates (1-4),
+  // B goal (bowl by day, bone by night), b l e g dogs, O orange frisbee, U blue frisbee.
+  // lv.rock [[x,y,h]] sets rock under a cell; lv.crates [[x,y,n]] sets crate count.
   function parse(lv) {
     const floor = new Int8Array(N * N), crates = new Int8Array(N * N);
     const dogs = DOGS.map(() => ({ i: -1, lvl: 0, ride: -1, rider: -1, active: false }));
+    const fr = [NONE, NONE];
     let bowl = -1;
-    const rows = lv.map;
     for (let y = 0; y < N; y++) {
-      const row = rows[y] || '';
+      const row = lv.map[y] || '';
       for (let x = 0; x < N; x++) {
-        const c = row[x] || 'T';
-        const i = y * N + x;
+        const c = row[x] || 'T', i = y * N + x;
         if (c === 'o') floor[i] = -1;
         else if (c === 'T' || c === '_') floor[i] = TREE;
         else if (c >= '1' && c <= '4') floor[i] = +c;
@@ -517,6 +541,8 @@ root.THREE = {
         else if (c === 'Y') crates[i] = 3;
         else if (c === 'Z') crates[i] = 4;
         else if (c === 'B') bowl = i;
+        else if (c === 'O') fr[0] = i;
+        else if (c === 'U') fr[1] = i;
         else {
           const d = DOGS.findIndex(D => D.key === c);
           if (d >= 0) { dogs[d].i = i; dogs[d].active = true; }
@@ -526,80 +552,106 @@ root.THREE = {
     for (const [x, y, h] of (lv.rock || [])) floor[y * N + x] = h;
     for (const [x, y, n] of (lv.crates || [])) crates[y * N + x] = n;
     for (const d of dogs) if (d.active) d.lvl = floor[d.i] + crates[d.i];
-    return { floor, crates, dogs, bowl };
+    return { floor, crates, dogs, bowl, fr };
   }
 
   function clone(s) {
-    return {
-      floor: s.floor, bowl: s.bowl,
-      crates: new Int8Array(s.crates),
-      dogs: s.dogs.map(d => ({ ...d })),
-    };
+    return { floor: s.floor, bowl: s.bowl, crates: new Int8Array(s.crates), dogs: s.dogs.map(d => ({ ...d })), fr: s.fr.slice() };
   }
 
   const height = (s, i) => s.floor[i] >= TREE ? 99 : s.floor[i] + s.crates[i];
   const foot = (s, d) => s.dogs[d].lvl + (s.dogs[d].ride >= 0 ? 1 : 0);
-  function dogsAt(s, i) { const r = []; s.dogs.forEach((d, k) => { if (d.active && d.i === i) r.push(k); }); return r; }
+  function dogsAt(s, i) { const r = []; for (let k = 0; k < 4; k++) { const d = s.dogs[k]; if (d.active && d.i === i) r.push(k); } return r; }
+  const holding = (s, d) => s.fr[0] === -1 - d ? 0 : s.fr[1] === -1 - d ? 1 : -1;
+  const frAt = (s, i) => s.fr[0] === i ? 0 : s.fr[1] === i ? 1 : -1;
+  const canCarry = d => d <= 2;      // the three biggest dogs
+  const teleporter = d => d === 3;   // the smallest dog
+
+  // Drop a held frisbee at the dog's cell. Returns event or null.
+  function drop(s, d) {
+    const f = holding(s, d);
+    if (f < 0) return null;
+    s.fr[f] = s.dogs[d].i;
+    return { drop: { f, cell: s.dogs[d].i, dog: d } };
+  }
 
   // Attempt a move. Mutates s. Returns null if blocked, else an event object.
+  // Any frisbee held by another dog is dropped first (switching dogs drops it).
   function move(s, d, dir) {
     const D = s.dogs[d];
     if (!D.active) return null;
-    if (D.rider >= 0) return { blocked: 'carrying' , fail: true };
+    if (D.rider >= 0) return { blocked: 'carrying', fail: true };
     const [dx, dy] = DIRS[dir];
-    const x = D.i % N, y = (D.i / N) | 0;
-    const tx = x + dx, ty = y + dy;
+    const x = D.i % N, y = (D.i / N) | 0, tx = x + dx, ty = y + dy;
     if (tx < 0 || ty < 0 || tx >= N || ty >= N) return null;
     const t = ty * N + tx;
     const F = foot(s, d);
-    const from = { i: D.i, lvl: D.lvl, ride: D.ride };
-    const ev = { dog: d, dir, from, push: null, mount: -1, dismount: D.ride };
     const occ = dogsAt(s, t);
-
-    const leave = () => { if (D.ride >= 0) { s.dogs[D.ride].rider = -1; D.ride = -1; } };
-
-    if (occ.length) {
-      // Mount a larger, free dog
+    const H = height(s, t);
+    let mode;
+    if (occ.length && H <= F) {
       if (occ.length !== 1) return null;
       const o = s.dogs[occ[0]];
-      if (o.ride >= 0 || o.rider >= 0) return null;
-      if (DOGS[occ[0]].size <= DOGS[d].size) return null;
-      if (o.lvl > F) return null;
-      leave();
-      D.i = t; D.lvl = o.lvl; D.ride = occ[0]; o.rider = d;
-      ev.mount = occ[0];
-      return ev;
-    }
-    const H = height(s, t);
-    if (H <= F) {
+      if (o.ride >= 0 || o.rider >= 0 || DOGS[occ[0]].size <= DOGS[d].size || o.lvl > F) return null;
+      mode = 'mount';
+    } else if (H <= F) {
       if (H < 0) return null; // hole
-      leave();
-      D.i = t; D.lvl = H;
+      mode = 'walk';
+    } else {
+      if (occ.length && !rules.ridePush) return null;
+      mode = 'push';
+    }
+    let push = null, u = -1, k = 0, Dh = 0;
+    if (mode === 'push') {
+      if (s.floor[t] > F || t === s.bowl) return null; // rock face / goal
+      k = H - F;
+      const ux = tx + dx, uy = ty + dy;
+      if (ux < 0 || uy < 0 || ux >= N || uy >= N) return null;
+      u = uy * N + ux;
+      if (u === s.bowl || dogsAt(s, u).length || frAt(s, u) >= 0) return null;
+      Dh = height(s, u);
+      if (Dh > F || Dh + k > MAXH) return null;
+    }
+    // ---- move is legal: apply ----
+    const ev = { dog: d, dir, from: { i: D.i, lvl: D.lvl, ride: D.ride }, push: null, mount: -1, dismount: D.ride, drops: [], pickup: -1, teleport: null };
+    for (let o = 0; o < 4; o++) if (o !== d) { const e = drop(s, o); if (e) ev.drops.push(e.drop); }
+    const leave = () => { if (D.ride >= 0) { s.dogs[D.ride].rider = -1; D.ride = -1; } };
+    if (mode === 'mount') {
+      const o = occ[0];
+      leave(); D.i = t; D.lvl = s.dogs[o].lvl; D.ride = o; s.dogs[o].rider = d; ev.mount = o;
       return ev;
     }
-    // Push
-    if (s.floor[t] > F) return null; // rock face
-    if (t === s.bowl) return null;
-    const k = H - F;
-    const ux = tx + dx, uy = ty + dy;
-    if (ux < 0 || uy < 0 || ux >= N || uy >= N) return null;
-    const u = uy * N + ux;
-    if (u === s.bowl) return null;
-    if (dogsAt(s, u).length) return null;
-    const Dh = height(s, u);
-    if (Dh > F) return null;
-    if (Dh + k > MAXH) return null;
-    const riders = dogsAt(s, t);
-    s.crates[t] -= k; s.crates[u] += k;
-    const newTop = Dh + k;
-    for (const r of riders) { s.dogs[r].i = u; s.dogs[r].lvl = newTop; }
-    leave();
-    D.i = t; D.lvl = F;
-    ev.push = { from: t, to: u, k, fromBase: F, toBase: Dh, riders };
+    if (mode === 'push') {
+      s.crates[t] -= k; s.crates[u] += k;
+      const newTop = Dh + k;
+      for (const r of occ) { s.dogs[r].i = u; s.dogs[r].lvl = newTop; }
+      const fOn = frAt(s, t); if (fOn >= 0) s.fr[fOn] = u;
+      leave(); D.i = t; D.lvl = F;
+      ev.push = { from: t, to: u, k, fromBase: F, toBase: Dh, riders: occ, fris: fOn };
+    } else { leave(); D.i = t; D.lvl = H; }
+    // arrive on a frisbee?
+    const f = frAt(s, t);
+    if (f >= 0) {
+      if (canCarry(d) && rules.carry && holding(s, d) < 0) { s.fr[f] = -1 - d; ev.pickup = f; }
+      else if (teleporter(d) && rules.teleport) {
+        const g = 1 - f, dest = s.fr[g];
+        if (dest >= 0 && dest !== t) {
+          const o2 = dogsAt(s, dest);
+          if (!o2.length) { D.i = dest; D.lvl = height(s, dest); ev.teleport = { from: t, to: dest, f, mount: -1 }; }
+          else if (o2.length === 1) {
+            const o = s.dogs[o2[0]];
+            if (o.ride < 0 && o.rider < 0 && DOGS[o2[0]].size > DOGS[d].size) {
+              D.i = dest; D.lvl = o.lvl; D.ride = o2[0]; o.rider = d; ev.teleport = { from: t, to: dest, f, mount: o2[0] };
+            }
+          }
+        }
+      }
+    }
     return ev;
   }
 
-  function won(s) {
+  function won(s, goal) {
+    if (goal) return s.dogs[goal.dog].i === goal.cell ? goal.dog : -1;
     for (let k = 0; k < 4; k++) { const d = s.dogs[k]; if (d.active && d.i === s.bowl) return k; }
     return -1;
   }
@@ -609,48 +661,52 @@ root.THREE = {
     if (KF !== s.floor) {
       KF = s.floor; KP = [];
       for (let i = 0; i < N * N; i++) if (s.floor[i] < TREE) KP.push(i);
-      KBUF = new Array(KP.length + 12);
+      KBUF = new Array(KP.length + 14);
     }
     let j = 0;
     for (let q = 0; q < KP.length; q++) KBUF[j++] = 48 + s.crates[KP[q]];
     for (const d of s.dogs) { KBUF[j++] = d.i + 40; KBUF[j++] = 48 + d.lvl; KBUF[j++] = 48 + d.ride; }
+    KBUF[j++] = s.fr[0] + 200; KBUF[j++] = s.fr[1] + 200;
     return String.fromCharCode.apply(null, KBUF);
   }
 
-  // BFS solver. Returns {moves, path} or null.
-  function solve(lv, limit = 3e6) {
-    const s0 = parse(lv);
+  // BFS from a state. opts: {goal:{dog,cell}, movable:[dogs], mask:(i)=>bool allowed, limit}
+  // Actions: [dog, dir] with dir 0-3 moves, dir 4 = drop frisbee (switch away and back).
+  function solveState(s0, opts = {}) {
+    const limit = opts.limit || 3e6;
+    s0 = clone(s0);
+    if (opts.mask) { const f = new Int8Array(s0.floor); for (let i = 0; i < N * N; i++) if (!opts.mask(i)) f[i] = TREE; s0.floor = f; }
+    const movable = opts.movable || [0, 1, 2, 3];
     const seen = new Map();
     seen.set(key(s0), null);
     let frontier = [s0], depth = 0;
-    const parents = new Map();
+    const trace = kc => { const path = []; let cur = kc; while (seen.get(cur)) { const [p, dd, di] = seen.get(cur); path.unshift([dd, di]); cur = p; } return path; };
     while (frontier.length) {
       const next = [];
       for (const s of frontier) {
         const ks = key(s);
-        const saveD = s.dogs.map(d => ({ ...d }));
-        for (let d = 0; d < 4; d++) {
+        const saveD = s.dogs.map(d => ({ ...d })), saveF = s.fr.slice();
+        for (const d of movable) {
           if (!s.dogs[d].active) continue;
-          for (let dir = 0; dir < 4; dir++) {
-            const i0 = s.dogs[d].i, t = i0 + DIRS[dir][0] + DIRS[dir][1] * N, u = t + DIRS[dir][0] + DIRS[dir][1] * N;
-            const ct = s.crates[t], cu = s.crates[u];
-            const ev = move(s, d, dir);
+          for (let dir = 0; dir < 5; dir++) {
+            let t = -1, u = -1, ct = 0, cu = 0, ev;
+            if (dir === 4) ev = drop(s, d);
+            else {
+              const i0 = s.dogs[d].i; t = i0 + DIRS[dir][0] + DIRS[dir][1] * N; u = t + DIRS[dir][0] + DIRS[dir][1] * N;
+              if (t >= 0 && t < N * N) ct = s.crates[t]; if (u >= 0 && u < N * N) cu = s.crates[u];
+              ev = move(s, d, dir);
+            }
             if (!ev || ev.fail) continue;
             const kc = key(s);
             let c = null;
             if (!seen.has(kc)) c = clone(s);
-            // restore
             if (t >= 0 && t < N * N) s.crates[t] = ct;
             if (u >= 0 && u < N * N) s.crates[u] = cu;
             for (let q = 0; q < 4; q++) Object.assign(s.dogs[q], saveD[q]);
+            s.fr[0] = saveF[0]; s.fr[1] = saveF[1];
             if (!c) continue;
             seen.set(kc, [ks, d, dir]);
-            if (won(c) >= 0) {
-              const path = [];
-              let cur = kc;
-              while (seen.get(cur)) { const [p, dd, di] = seen.get(cur); path.unshift([dd, di]); cur = p; }
-              return { moves: depth + 1, path, states: seen.size };
-            }
+            if (won(c, opts.goal) >= 0) { c.floor = s0.floor; return { moves: depth + 1, path: trace(kc), states: seen.size, end: c }; }
             next.push(c);
           }
         }
@@ -660,8 +716,27 @@ root.THREE = {
     }
     return null;
   }
+  function solve(lv, limit = 3e6) { return solveState(parse(lv), { limit }); }
 
-  const api = { N, TREE, MAXH, DOGS, DIRS, parse, clone, move, won, height, foot, dogsAt, solve, key };
+  // Staged solve for two-part levels. Each stage: {movable, goal:{dog:'g'|idx, at:[x,y]} | 'win', region:[[x0,y0,x1,y1],...]}
+  function solveStaged(lv, stages, limit = 3e6) {
+    let s = parse(lv), path = [], states = 0;
+    const orig = s.floor;
+    for (const st of stages) {
+      const dogIdx = k => typeof k === 'number' ? k : DOGS.findIndex(D => D.key === k);
+      const opts = { limit };
+      if (st.movable) opts.movable = st.movable.map(dogIdx);
+      if (st.goal && st.goal !== 'win') opts.goal = { dog: dogIdx(st.goal.dog), cell: st.goal.at[1] * N + st.goal.at[0] };
+      if (st.region) opts.mask = i => { const x = i % N, y = (i / N) | 0; return st.region.some(([a, b, c, d]) => x >= a && x <= c && y >= b && y <= d); };
+      s.floor = orig;
+      const r = solveState(s, opts);
+      if (!r || r.moves < 0) return { moves: r ? -1 : null, failedStage: stages.indexOf(st), states: states + (r ? r.states : 0) };
+      path = path.concat(r.path); states += r.states; s = r.end; s.floor = orig;
+    }
+    return { moves: path.length, path, states };
+  }
+
+  const api = { N, TREE, MAXH, DOGS, DIRS, NONE, FRIS, rules, parse, clone, move, drop, won, height, foot, dogsAt, holding, frAt, solve, solveState, solveStaged, key };
   if (typeof module !== 'undefined') module.exports = api; else root.Logic = api;
 })(this);
 </script>
@@ -680,7 +755,6 @@ const RAW = [
 'Te..x.....T',
 'TTTTTT..B.T',
 'TTTTTTTTTTT'] },
-
 { name: 'Teamwork', start: 'e',
   hint: 'Oatie is boxed in! Press SPACE to switch dogs. Any dog who reaches the bowl wins the level.',
   map: [
@@ -690,7 +764,6 @@ const RAW = [
 'TTT.T....T',
 'Tl.....B.T',
 'TTTTTTTTTT'] },
-
 { name: 'Mind the Hole', start: 'g',
   hint: 'Dogs and crates cannot cross holes. Push a crate INTO a hole to fill it, then walk across.',
   map: [
@@ -702,7 +775,6 @@ const RAW = [
 'T........T',
 'T...B....T',
 'TTTTTTTTTT'] },
-
 { name: 'Two Moats', start: 'g',
   hint: 'Plan ahead: two moats, two crates. Push them in the right order. Press Z to undo, R to restart.',
   map: [
@@ -715,7 +787,6 @@ const RAW = [
 'TooooooooTT',
 'T.....B...T',
 'TTTTTTTTTTT'] },
-
 { name: 'Stack Attack', start: 'b',
   hint: 'Meet Bear! Crates can be stacked. Push a stack into a hole: the bottom crate fills it and the rest stay on top.',
   map: [
@@ -728,7 +799,6 @@ const RAW = [
 'ToooooooT',
 'T...B...T',
 'TTTTTTTTT'] },
-
 { name: 'Piggyback', start: 'l',
   hint: 'A smaller dog can hop onto a BIGGER dog\'s back, then climb up one level. Walk Louise into Bear, then onto the rocks.',
   map: [
@@ -739,7 +809,6 @@ const RAW = [
 'T.l...111T',
 'T........T',
 'TTTTTTTTTT'], rock: [[7,3,1]] },
-
 { name: 'Over the Edge', start: 'b',
   hint: 'Crates pushed off a ledge drop down to the level below. Get Louise up top and push that crate!',
   map: [
@@ -749,7 +818,6 @@ const RAW = [
 'T....111oBT',
 'T.l.....o.T',
 'TTTTTTTTTTT'], rock: [[6,2,1]] },
-
 { name: 'Third Floor', start: 'e',
   hint: 'Meet Oatie! Louise is bigger than Oatie, so once Louise is up a level, Oatie can climb on HER back to go even higher.',
   map: [
@@ -760,19 +828,14 @@ const RAW = [
 'T.l.111..T',
 'T.....e..T',
 'TTTTTTTTTT'], rock: [[5,3,2]] },
-
 { name: 'Going Up?', start: 'b',
-  hint: 'Bear can push a crate stack even with a dog riding on top. Drop Gerty into the moat on her crates!',
+  hint: 'Bear can push a crate stack even with a dog riding on top! Keep Gerty on her tower and push her across the holes.',
   map: [
-'TTTTTTTTT',
-'T111B111T',
-'T1111111T',
-'TooooooooT'.slice(0,8)+'T',
-'T.......T',
-'T...g...T',
-'T...b...T',
-'TTTTTTTTT'], rock: [[4,1,1]], crates: [[4,5,2]] },
-
+'TTTTTTTTTT',
+'TTTTTTT22T',
+'T.b.goo2BT',
+'TTTTTTT22T',
+'TTTTTTTTTT'], rock: [[8,2,2]], crates: [[4,2,4]] },
 { name: 'Top of the World', start: 'g',
   hint: 'The whole pack! Gerty Boots is the smallest, so she can climb the highest: Bear, then Louise, then Oatie.',
   map: [
@@ -787,47 +850,52 @@ const RAW = [
 { name: "Island Hop", start: 'g',
   hint: "Gerty Boots is back! The bowl sits on a rock island. Who can make the climb?",
   map: ["TTTTTTTTT", "T..g...xT", "T.......T", "TooTx.T.T", "TBo.x..TT", "Tool..b.T", "TTTTTTTTT"], rock: [[1, 4, 1], [3, 4, 1], [4, 5, 1]], crates: [[4, 3, 2]] },
-
 { name: "Ledge Logic", start: 'l',
   hint: "Rocks can be climbed but never pushed. Crates can be both.",
   map: ["TTTTTTTTT", "TBo..e.lT", "Too.....T", "T...b...T", "T..T.x.TT", "Tx..x...T", "TTTTTTTTT"], rock: [[5, 5, 1], [3, 5, 1], [1, 5, 1], [5, 2, 1], [6, 3, 1]], crates: [[5, 4, 2]] },
-
 { name: "Stair Master", start: 'b',
   hint: "Build your own staircase out of crates.",
   map: ["TTTTTTTT", "TTx....T", "TTx.Tl.T", "T.x..o.T", "Tx..o..T", "Teb...BT", "TTTTTTTT"], rock: [[6, 5, 2]], crates: [] },
-
 { name: "Deep Dig", start: 'b',
   hint: "Some holes need more than one crate's worth of thinking.",
   map: ["TTTTTTTTT", "TT.T..x.T", "T.x.x..eT", "T.x.T...T", "T.Tl.b..T", "T.ooo...T", "T.oBo...T", "TTTTTTTTT"], rock: [[3, 6, 1], [6, 2, 1], [5, 2, 1]], crates: [[2, 2, 3], [2, 3, 2]] },
-
 { name: "Stack Ferry", start: 'g',
   hint: "A tall stack can fill a hole AND leave a step behind.",
   map: ["TTTTTTTTT", "T..oBo.xT", "T..ooo.lT", "Tx.....TT", "T.x..Tg.T", "T.T....bT", "TTTTTTTTT"], rock: [[4, 1, 1], [7, 4, 1], [3, 3, 1]], crates: [[2, 4, 2]] },
-
-{ name: "The Mesa", start: 'b',
-  hint: "Look before you leap. Dogs can always hop down, but getting back up takes teamwork.",
-  map: ["TTTTTTTTT", "TxoBT..eT", "T.loo.x.T", "T.......T", "T.T.....T", "Tb....x.T", "TTTTTTTTT"], rock: [[4, 5, 1], [4, 3, 1], [6, 2, 1], [6, 3, 1], [5, 3, 1]], crates: [[1, 1, 2]] },
-
+{"name": "Double Trouble", "start": "e", "night": false, "hint": "TWO PUZZLES IN ONE! Oatie is boxed in on the left. Free him, because the dogs on the right can't reach the bowl without him.", "map": ["TTTTTTTTTTTTTTT", "T.x..oToTT....T", "T....TT.....ToT", "ToT.xo.x...B..T", "T.xe..Tx.b..l.T", "To....Tx......T", "TTTTTTTTTTTTTTT"], "rock": [[11, 3, 2], [8, 5, 1], [9, 3, 1]], "crates": [[4, 3, 2]], "stages": [{"movable": ["e"], "goal": {"dog": "e", "at": [6, 3]}, "region": [[0, 0, 6, 6]]}, {"region": [[6, 0, 14, 6]], "goal": "win"}]},
 { name: "Pyramid Scheme", start: 'e',
   hint: "Oatie needs two levels of help. Plan where every crate ends up.",
   map: ["TTTTTTTT", "Tx..x..T", "T..Ble.T", "To.....T", "TbT.x.xT", "T.o.T.TT", "TTTTTTTT"], rock: [[3, 2, 2]], crates: [] },
-
-{ name: "Crate Canyon", start: 'b',
-  hint: "Big stacks, deep holes, high ledges. Use everything you've learned.",
-  map: ["TTTTTTTTT", "Tx....b.T", "T...oo..T", "Te..oBo.T", "TxlT.oTTT", "T.xT....T", "Tx......T", "TTTTTTTTT"], rock: [[5, 3, 1], [3, 6, 1], [1, 5, 1]], crates: [[1, 4, 3], [2, 5, 2]] },
-
-{ name: "Pack Tower", start: 'g',
-  hint: "Everybody up! Only a dog on a bigger dog's back can climb a level.",
-  map: ["TTTTTTT", "T.xxxBT", "Tg.eo.T", "T....bT", "T....oT", "TTlTTxT", "TTTTTTT"], rock: [[5, 1, 3], [1, 3, 1], [4, 4, 2]], crates: [[2, 1, 2]] },
-
-{ name: "Summit Supper", start: 'g',
-  hint: "The final feast is at the very top. Bear, Louise, Oatie and Gerty: assemble!",
-  map: ["TTTTTTT", "T.Bbe.T", "T..T.xT", "TTx.glT", "T.T.x.T", "To.o.xT", "TTTTTTT"], rock: [[2, 1, 3], [5, 1, 2], [2, 2, 3]], crates: [[2, 3, 2]] },
-
+{"name": "Bear Necessities", "start": "b", "night": false, "hint": "Bear is stuck in the crate maze. Get him out: Louise and Gerty need a big strong back to climb.", "map": ["TTTTTTTTTTTTTTT", "Tox..bTx..xogTT", "T..T.o.....B..T", "T..x..TTx..oo.T", "Txx.T.T.T.....T", "To..ooT.....l.T", "TTTTTTTTTTTTTTT"], "rock": [[11, 2, 2], [9, 3, 1], [13, 4, 1]], "crates": [[3, 3, 2], [10, 1, 2]], "stages": [{"movable": ["b"], "goal": {"dog": "b", "at": [6, 2]}, "region": [[0, 0, 6, 6]]}, {"region": [[6, 0, 14, 6]], "goal": "win"}]},
+{"name": "Gerty's Great Escape", "start": "g", "night": false, "hint": "Gerty must climb out of her yard (Oatie can give her a boost) to help Bear and Louise next door.", "map": ["TTTTTTTTTTTTTTT", "T.....T.Tx..B.T", "Txx...TT.l...oT", "T...........o.T", "ToTT.oT.x..T..T", "T.ge..T..b...xT", "TTTTTTTTTTTTTTT"], "rock": [[5, 3, 1], [4, 5, 1], [2, 3, 1], [12, 1, 2], [10, 3, 2], [12, 4, 2]], "crates": [[13, 5, 2]], "stages": [{"movable": ["g", "e"], "goal": {"dog": "g", "at": [6, 3]}, "region": [[0, 0, 6, 6]]}, {"region": [[6, 0, 14, 6]], "goal": "win"}]},
+{"name": "Louise Loose", "start": "l", "night": false, "hint": "The last daytime bowl! Louise and Gerty start penned in. Louise is the missing piece of Bear and Oatie's tower.", "map": ["TTTTTTTTTTTTTTT", "T..lo.TT...xx.T", "To..oo.x......T", "T.gT.xTTBo...TT", "T.x.T.To.o.e..T", "T..x..Txb.....T", "TTTTTTTTTTTTTTT"], "rock": [[5, 5, 1], [8, 3, 2], [11, 3, 1], [12, 4, 2]], "crates": [[2, 4, 2], [7, 2, 2]], "stages": [{"movable": ["l", "g"], "goal": {"dog": "l", "at": [6, 2]}, "region": [[0, 0, 6, 6]]}, {"region": [[6, 0, 14, 6]], "goal": "win"}]},
+// ---------------- NIGHT ----------------
+{"name": "Moonlight Fetch", "start": "b", "night": true, "hint": "NIGHT TIME! Frisbees: Bear, Louise and Oatie grab one by walking onto it, and drop it when you press SPACE to switch dogs. Gerty Boots is too small to carry one. When she steps on a frisbee, she pops out of the other one! Bring a frisbee down from the ledge for Gerty.", "map": ["TTTTTTTTTTTTT", "TT.o..x.T...T", "T...x..bTxO.T", "T.......T.xoT", "T..o...UT.ooT", "Txxg.x..TBT.T", "TTTTTTTTTTTTT"], "rock": [[4, 1, 2], [5, 1, 2], [6, 1, 2], [7, 1, 2], [4, 2, 2], [5, 2, 2], [6, 2, 2], [7, 2, 2], [4, 3, 2], [5, 3, 2], [6, 3, 2], [7, 3, 2], [4, 4, 2], [5, 4, 2], [6, 4, 2], [7, 4, 2], [4, 5, 2], [5, 5, 2], [6, 5, 2], [7, 5, 2]], "crates": []},
+{"name": "Hedge Hopper", "start": "g", "night": true, "hint": "The bone is behind the hedge. Gerty can hop into the blue frisbee and pop out of the orange one.", "map": ["TTTTTTTTT", "To.xT...T", "T.oUTx.xT", "T..oT.OoT", "TxeTT.BTT", "Tgo.T.T.T", "TTTTTTTTT"], "rock": [], "crates": [[1, 4, 2]]},
+{"name": "Special Delivery", "start": "b", "night": true, "hint": "Bear and Oatie are up on the ledge with both frisbees. Gerty is waiting below, and the bone is in the sealed garden.", "map": ["TTTTTTTTTTTTT", "Tx.xxx.T...BT", "T...T..T.xo.T", "T..oUb.T.x..T", "T..o...TOxo.T", "T.go.e.T..oTT", "TTTTTTTTTTTTT"], "rock": [[4, 1, 2], [5, 1, 2], [6, 1, 2], [5, 2, 2], [6, 2, 2], [4, 3, 2], [5, 3, 2], [6, 3, 2], [4, 4, 2], [5, 4, 2], [6, 4, 2], [4, 5, 2], [5, 5, 2], [6, 5, 2]], "crates": []},
+{"name": "Portal Pond", "start": "g", "night": true, "hint": "Gerty's frisbee portals work both ways: step on orange to pop out of blue, too.", "map": ["TTTTTTTTT", "Tg.T.U..T", "T..oxxo.T", "TOlT.B.oT", "TT.T....T", "Tx.T..oTT", "TTTTTTTTT"], "rock": [[5, 3, 1], [4, 5, 1]], "crates": [[5, 2, 2]]},
+{"name": "Ledge Drop", "start": "b", "night": true, "hint": "A frisbee drops wherever its dog is standing when you switch. Choose that spot carefully!", "map": ["TTTTTTTTTTTTT", "T.xo..b.T.BoT", "T.......Tx..T", "T.go....T.xoT", "TT....xxT.OoT", "T..x.xU.T.T.T", "TTTTTTTTTTTTT"], "rock": [[4, 1, 2], [5, 1, 2], [6, 1, 2], [7, 1, 2], [4, 2, 2], [5, 2, 2], [6, 2, 2], [7, 2, 2], [4, 3, 2], [5, 3, 2], [6, 3, 2], [7, 3, 2], [4, 4, 2], [5, 4, 2], [6, 4, 2], [7, 4, 2], [4, 5, 2], [5, 5, 2], [6, 5, 2], [7, 5, 2]], "crates": []},
+{"name": "Frisbee Shuffle", "start": "g", "night": true, "hint": "Sometimes a frisbee is in the wrong place. Louise can move it.", "map": ["TTTTTTTTT", "T...oT..T", "Tx.o.TUBT", "TT...Tg.T", "TToxOo..T", "T..l.Tx.T", "TTTTTTTTT"], "rock": [[7, 2, 1], [4, 5, 1]], "crates": [[1, 2, 2]]},
+{"name": "Garden Party", "start": "e", "night": true, "hint": "Oatie has to get a frisbee down to Gerty without getting stuck himself.", "map": ["TTTTTTTTTTTT", "Tx.....T.o.T", "T..o.e.TT.OT", "T..gx..T..xT", "Tx.oU.xTx..T", "T..o...TB.oT", "TTTTTTTTTTTT"], "rock": [[4, 1, 2], [5, 1, 2], [6, 1, 2], [4, 2, 2], [5, 2, 2], [6, 2, 2], [4, 3, 2], [5, 3, 2], [6, 3, 2], [4, 4, 2], [5, 4, 2], [6, 4, 2], [4, 5, 2], [5, 5, 2], [6, 5, 2]], "crates": []},
+{"name": "Two Yards", "start": "g", "night": true, "hint": "TWO PUZZLES IN ONE! Gerty has to teleport out of the left yard. Bear and Louise need her on the right.", "map": ["TTTTTTTTTTTTTTT", "TxeT..T..b..T.T", "T.gTTOT.T..ooxT", "TxoT.....l..B.T", "T.oT..T...xToxT", "T.UT..Tx......T", "TTTTTTTTTTTTTTT"], "rock": [[12, 3, 2], [9, 5, 2], [7, 4, 1]], "crates": [[13, 2, 2]], "stages": [{"movable": ["e", "g"], "goal": {"dog": "g", "at": [6, 3]}, "region": [[0, 0, 6, 6]]}, {"region": [[6, 0, 14, 6]], "goal": "win"}]},
+{"name": "Louise's Lookout", "start": "l", "night": true, "hint": "Two carriers on the ledge. Which one goes down, and which one stays?", "map": ["TTTTTTTTTTTT", "T.T...xT...T", "Txxo..TT.T.T", "T...l..TBoOT", "T..o..UTo..T", "T.go.exTxx.T", "TTTTTTTTTTTT"], "rock": [[4, 1, 2], [5, 1, 2], [6, 1, 2], [4, 2, 2], [5, 2, 2], [4, 3, 2], [5, 3, 2], [6, 3, 2], [4, 4, 2], [5, 4, 2], [6, 4, 2], [4, 5, 2], [5, 5, 2], [6, 5, 2]], "crates": []},
+{"name": "Round Trip", "start": "g", "night": true, "hint": "Gerty may need to teleport more than once. Step off a frisbee and back on to use it again.", "map": ["TTTTTTTTT", "TgTTT...T", "ToT...xoT", "TxT..O.oT", "TUTo.xx.T", "TeT.oTB.T", "TTTTTTTTT"], "rock": [], "crates": [[6, 4, 2]]},
+{"name": "Next Door Neighbors", "start": "g", "night": true, "hint": "Free Gerty with a frisbee portal, then help the big dogs next door reach the bone.", "map": ["TTTTTTTTTTTTTTT", "TU.T.OT...l.x.T", "TT.T..T..T.Bo.T", "T..T....x.booxT", "ToxT..T......TT", "TegTxoT..Tx...T", "TTTTTTTTTTTTTTT"], "rock": [[11, 2, 2], [11, 4, 2], [10, 2, 2]], "crates": [[10, 5, 2]], "stages": [{"movable": ["e", "g"], "goal": {"dog": "g", "at": [6, 3]}, "region": [[0, 0, 6, 6]]}, {"region": [[6, 0, 14, 6]], "goal": "win"}]},
+{"name": "Bear's Big Step", "start": "b", "night": true, "hint": "Bear is the only one up high. He can push crates off the ledge, too.", "map": ["TTTTTTTTTTTTT", "T...U..bTTx.T", "T.xo....T..BT", "TT....x.ToooT", "T..x....TOx.T", "T.go.xx.T...T", "TTTTTTTTTTTTT"], "rock": [[4, 1, 2], [5, 1, 2], [6, 1, 2], [7, 1, 2], [4, 2, 2], [5, 2, 2], [6, 2, 2], [7, 2, 2], [4, 3, 2], [5, 3, 2], [6, 3, 2], [7, 3, 2], [4, 4, 2], [5, 4, 2], [6, 4, 2], [7, 4, 2], [4, 5, 2], [5, 5, 2], [6, 5, 2], [7, 5, 2]], "crates": []},
+{"name": "Pop Goes Gerty", "start": "g", "night": true, "hint": "Push the crates so Gerty pops out somewhere useful.", "map": ["TTTTTTTTT", "TT.eoTo.T", "To...T..T", "T.xgxTB.T", "TT.oxTx.T", "T.TUoT.OT", "TTTTTTTTT"], "rock": [], "crates": [[6, 4, 2]]},
+{"name": "Moon Maze", "start": "g", "night": true, "hint": "A long one! Louise and Gerty will need to swap jobs a lot.", "map": ["TTTTTTTTT", "T...TB..T", "T..TTUx.T", "Tg..T..oT", "T.o.oxxoT", "Tl.OT.T.T", "TTTTTTTTT"], "rock": [[5, 1, 1], [2, 5, 1]], "crates": [[6, 2, 2]]},
+{"name": "Oatie's Outing", "start": "e", "night": true, "hint": "Oatie must escape the left yard (with Gerty's help) to finish Bear and Louise's tower.", "map": ["TTTTTTTTTTTTTTT", "T...xoT.....b.T", "T..Too.x......T", "Tgxeo.T..xT...T", "T..xTOT..xoT..T", "T...U.TloBoT..T", "TTTTTTTTTTTTTTT"], "rock": [[9, 5, 2], [8, 2, 2], [13, 4, 2]], "crates": [[2, 3, 2], [7, 2, 2]], "stages": [{"movable": ["g", "e"], "goal": {"dog": "e", "at": [6, 2]}, "region": [[0, 0, 6, 6]]}, {"region": [[6, 0, 14, 6]], "goal": "win"}]},
+{"name": "Oatie's Return", "start": "e", "night": true, "hint": "Another escape for Oatie. The frisbees are only on the left side.", "map": ["TTTTTTTTTTTTTTT", "Teg.UxTT..oBo.T", "T.TO.o......o.T", "T..Tx.Tx..bT..T", "T.xo..T.lT....T", "T.o..oT..xx...T", "TTTTTTTTTTTTTTT"], "rock": [[11, 1, 2], [11, 4, 2], [10, 4, 1]], "crates": [[4, 3, 2], [9, 5, 2]], "stages": [{"movable": ["e", "g"], "goal": {"dog": "e", "at": [6, 2]}, "region": [[0, 0, 6, 6]]}, {"region": [[6, 0, 14, 6]], "goal": "win"}]},
+{"name": "Ledge of Night", "start": "e", "night": true, "hint": "Only Gerty can enter the garden. Only Oatie can reach the frisbees.", "map": ["TTTTTTTTTTTT", "T....x.TT.oT", "T.xoe.UT.BxT", "T..o...T...T", "T.xo...T.oOT", "T..g..xT.x.T", "TTTTTTTTTTTT"], "rock": [[4, 1, 2], [5, 1, 2], [6, 1, 2], [4, 2, 2], [5, 2, 2], [6, 2, 2], [4, 3, 2], [5, 3, 2], [6, 3, 2], [4, 4, 2], [5, 4, 2], [6, 4, 2], [4, 5, 2], [5, 5, 2], [6, 5, 2]], "crates": []},
+{"name": "Starlight Switchback", "start": "g", "night": true, "hint": "Gerty bounces between the portals. Count your crates!", "map": ["TTTTTTTTT", "TTgU.T.TT", "TO...TloT", "TBo..ox.T", "T.x..Tx.T", "To...T..T", "TTTTTTTTT"], "rock": [[1, 3, 1], [7, 4, 1]], "crates": [[2, 4, 2]]},
+{"name": "Bear Breakout", "start": "b", "night": true, "hint": "Bear and Oatie must get Bear out. Louise and Gerty can't finish without him.", "map": ["TTTTTTTTTTTTTTT", "T.xo..TU..gT..T", "T....xTlo..T..T", "T.To.o...B...xT", "Tbx..TTxooT...T", "Teo...T..x...OT", "TTTTTTTTTTTTTTT"], "rock": [[9, 3, 2], [10, 3, 1], [12, 3, 2]], "crates": [[5, 2, 2], [7, 4, 2]], "stages": [{"movable": ["b", "e"], "goal": {"dog": "b", "at": [6, 3]}, "region": [[0, 0, 6, 6]]}, {"region": [[6, 0, 14, 6]], "goal": "win"}]},
+{"name": "The Last Bone", "start": "g", "night": true, "hint": "The final bone of the night! Everything you've learned, in two parts.", "map": ["TTTTTTTTTTTTTTT", "TgeTO.Tx....T.T", "TTxT..Tl.....TT", "T..T...xToo..xT", "T..TxoT..B....T", "TUoT..Tbo.x...T", "TTTTTTTTTTTTTTT"], "rock": [[9, 4, 2], [12, 3, 2], [9, 1, 2]], "crates": [[13, 3, 2]], "stages": [{"movable": ["g", "e"], "goal": {"dog": "g", "at": [6, 3]}, "region": [[0, 0, 6, 6]]}, {"region": [[6, 0, 14, 6]], "goal": "win"}]},
 ];
 
 const CODES = ['', 'WOOF','BONE','PAWS','SNIF','BARK','TAIL','FUZZ','DIGS','NAPS','BEEF',
-  'FETCH','ZOOMS','TREAT','SQUEAK','PUDDLE','BELLY','SNOOT','BOOPS','HOWLS','KIBBLE'];
+  'FETCH','ZOOMS','TREAT','SQUEAK','PUDDLE','BELLY','SNOOT','BOOPS','HOWLS','KIBBLE',
+  'MOON','STARS','OWLS','GLOW','HOOT','DUSK','COMET','FROGS','CRICKET','LUNA',
+  'DREAM','ORBIT','SNORE','NOVA','FIREFLY','ZZZZ','MIDNITE','GALAXY','FRISBEE','BURYIT'];
 
 function pad(lv) {
   const h = lv.map.length, w = Math.max(...lv.map.map(r => r.length));
@@ -843,7 +911,8 @@ function pad(lv) {
     rows.push(r);
   }
   const sh = a => (a || []).map(([x, y, v]) => [x + ox, y + oy, v]);
-  return { ...lv, map: rows, rock: sh(lv.rock), crates: sh(lv.crates) };
+  const stages = lv.stages && lv.stages.map(st => ({ ...st, region: st.region.map(([a, b, c, d]) => [a + ox, b + oy, c + ox, d + oy]), goal: st.goal === 'win' ? 'win' : { dog: st.goal.dog, at: [st.goal.at[0] + ox, st.goal.at[1] + oy] } }));
+  return { ...lv, map: rows, rock: sh(lv.rock), crates: sh(lv.crates), stages };
 }
 const LEVELS = RAW.map(pad);
 const api = { LEVELS, CODES };
@@ -915,6 +984,12 @@ const Audio = (() => {
       [523, 659, 784, 1047, 784, 1047].forEach((f, i) => tone('square', f, f, 0.16, 0.13, i * 0.11));
       [262, 330, 392, 523].forEach((f, i) => tone('triangle', f, f, 0.5, 0.18, i * 0.22));
     },
+    pickup() { tone('square', 520, 780, 0.06, 0.14); tone('square', 980, 980, 0.05, 0.1, 0.06); },
+    fdrop() { tone('triangle', 420, 200, 0.12, 0.18); noise(0.05, 0.12, 900, 0.08); },
+    teleIn() { tone('square', 900, 120, 0.35, 0.14); tone('sine', 1400, 200, 0.35, 0.1); },
+    teleOut() { tone('square', 150, 1100, 0.28, 0.14); tone('sine', 300, 1800, 0.25, 0.08, 0.04); },
+    dig() { noise(0.07, 0.3, 700); noise(0.06, 0.22, 500, 0.09); },
+    bury() { [392, 494, 587, 784, 740, 784].forEach((f, i) => tone('triangle', f, f, 0.22, 0.16, i * 0.12)); [196, 247, 294].forEach((f, i) => tone('sine', f, f, 0.6, 0.12, i * 0.25)); },
     fanfare() {
       const m = [523, 523, 659, 784, 659, 784, 1047, 1047, 988, 1047];
       m.forEach((f, i) => tone('square', f, f, 0.18, 0.12, i * 0.16));
@@ -936,7 +1011,27 @@ const Audio = (() => {
     [76, -1, 72, -1, 69, -1, -1, -1, 64, -1, 69, -1, 72, -1, -1, -1],
     [74, -1, 77, -1, 74, -1, 70, -1, 72, -1, 74, -1, 70, -1, 69, -1],
     [67, -1, -1, -1, 72, -1, 70, -1, 69, -1, 67, -1, 65, -1, -1, -1]];
+  // night: A minor – F – C – G, then D minor – A minor – F – E  (slower, dreamier)
+  const NCH = [[45, 57, 60, 64], [41, 57, 60, 65], [48, 55, 60, 64], [43, 55, 59, 62],
+               [50, 57, 62, 65], [45, 57, 60, 64], [41, 57, 60, 65], [40, 56, 59, 64]];
+  const NMEL = [
+    [76, -1, -1, 72, -1, 69, -1, -1, 72, -1, 76, -1, 79, -1, -1, -1],
+    [77, -1, -1, 76, -1, 72, -1, -1, 69, -1, -1, -1, 72, -1, -1, -1],
+    [76, -1, 79, -1, 76, -1, 72, -1, 67, -1, -1, -1, 72, -1, -1, -1],
+    [74, -1, -1, 71, -1, 67, -1, -1, 71, -1, 74, -1, 79, -1, -1, -1],
+    [77, -1, -1, 74, -1, 69, -1, -1, 74, -1, 77, -1, 81, -1, -1, -1],
+    [79, -1, 76, -1, 72, -1, -1, -1, 69, -1, 72, -1, 76, -1, -1, -1],
+    [77, -1, 76, -1, 72, -1, 69, -1, 72, -1, -1, -1, 69, -1, -1, -1],
+    [68, -1, -1, -1, 71, -1, -1, -1, 76, -1, 74, -1, 71, -1, -1, -1]];
+  let theme = 'day', nextCricket = 0;
   let step = 0, nextT = 0;
+  function chirp(t, f, vol) {
+    for (let i = 0; i < 3; i++) {
+      const o = ctx.createOscillator(), gn = ctx.createGain(), t0 = t + i * 0.055;
+      o.type = 'sine'; o.frequency.value = f; gn.gain.setValueAtTime(0, t0); gn.gain.linearRampToValueAtTime(vol, t0 + 0.008); gn.gain.linearRampToValueAtTime(0, t0 + 0.035);
+      o.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + 0.05);
+    }
+  }
   function mnote(type, m, t, dur, vol, cutoff) {
     const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
     o.type = type; o.frequency.value = mtof(m); f.type = 'lowpass'; f.frequency.value = cutoff;
@@ -945,25 +1040,31 @@ const Audio = (() => {
     o.connect(f); f.connect(g); g.connect(musicGain); o.start(t); o.stop(t + dur * 1.6 + 0.1);
   }
   function sched() {
+    const night = theme === 'night', CHS = night ? NCH : CH, MELS = night ? NMEL : MEL, E = night ? E8 * 1.18 : E8;
+    if (night) while (nextCricket < ctx.currentTime + 0.4) {
+      chirp(nextCricket, 4300 + Math.random() * 300, 0.012); if (Math.random() < 0.4) chirp(nextCricket + 0.33, 3800, 0.008);
+      nextCricket += 0.6 + Math.random() * 1.6;
+    }
     while (nextT < ctx.currentTime + 0.4) {
-      const ci = Math.floor(step / 16) % CH.length, s = step % 16, ch = CH[ci];
+      const ci = Math.floor(step / 16) % CHS.length, s = step % 16, ch = CHS[ci];
       if (s === 0) { // soft pad
-        for (const m of ch.slice(1)) mnote('triangle', m, nextT, E8 * 16, 0.06, 900);
-        mnote('triangle', ch[0] - 12, nextT, E8 * 7, 0.16, 500);
+        for (const m of ch.slice(1)) mnote('triangle', m, nextT, E * 16, night ? 0.05 : 0.06, night ? 700 : 900);
+        mnote('triangle', ch[0] - 12, nextT, E * 7, 0.16, 500);
       }
-      if (s === 8) mnote('triangle', ch[0] - 12 + 7, nextT, E8 * 7, 0.12, 500);
+      if (s === 8) mnote('triangle', ch[0] - 12 + 7, nextT, E * 7, 0.12, 500);
       // music-box arpeggio (low-bit square, filtered)
-      const arp = [0, 1, 2, 3, 2, 1, 2, 3][s % 8];
-      mnote('square', ch[arp] + 12, nextT, E8 * 0.9, 0.025, 1400);
-      const mel = MEL[ci][s];
-      if (mel > 0 && Math.floor(step / 128) % 2 === 1) mnote('triangle', mel, nextT, E8 * 2.2, 0.09, 2400);
-      else if (mel > 0 && s % 4 === 0) mnote('sine', mel, nextT, E8 * 2, 0.05, 2000);
-      nextT += E8; step++;
+      const arp = (night ? [0, 2, 1, 3, 2, 1, 3, 2] : [0, 1, 2, 3, 2, 1, 2, 3])[s % 8];
+      if (!night || s % 2 === 0) mnote(night ? 'triangle' : 'square', ch[arp] + (night ? 24 : 12), nextT, E * (night ? 1.6 : 0.9), night ? 0.035 : 0.025, night ? 2600 : 1400);
+      const mel = MELS[ci][s];
+      if (mel > 0 && Math.floor(step / 128) % 2 === 1) mnote(night ? 'sine' : 'triangle', mel, nextT, E * 2.6, 0.09, 2400);
+      else if (mel > 0 && s % 4 === 0) mnote('sine', mel, nextT, E * 2, 0.05, 2000);
+      nextT += E; step++;
     }
   }
   return {
     init, sfx: new Proxy(sfx, { get: (o, k) => (...a) => { if (ctx && !muted) o[k](...a); } }),
     startMusic() { init(); if (!ctx || musicOn) return; musicOn = true; nextT = ctx.currentTime + 0.1; timer = setInterval(sched, 100); },
+    setTheme(t) { if (t === theme) return; theme = t; step = 0; if (ctx) { nextT = ctx.currentTime + 0.15; nextCricket = ctx.currentTime + 0.5; } },
     toggleMute() { muted = !muted; if (master) master.gain.value = muted ? 0 : 0.9; return muted; },
     get muted() { return muted; },
   };
@@ -1052,6 +1153,7 @@ const TEX = {
   bark: tex(16, 16, (g, w, h) => { speckle(g, w, h, '#6a4528', ['#5a381f', '#7a5232'], 100); g.fillStyle = '#4a2e18'; for (let x = 0; x < w; x += 4) g.fillRect(x, 0, 1, h); }),
   leaf: tex(16, 16, (g, w, h) => speckle(g, w, h, '#2f7a34', ['#3d9142', '#256428', '#4aa04e'], 120)),
   slab: tex(32, 32, (g, w, h) => { speckle(g, w, h, '#5e3d22', ['#6e4a2a', '#4e321b', '#7a5532'], 600); g.fillStyle = '#4f9a3a'; g.fillRect(0, 0, w, 3); for (let x = 0; x < w; x += 2) if (rnd() < .6) g.fillRect(x, 3, 1, 1 + (rnd() * 3 | 0)); }),
+  glow: (() => { const t = tex(32, 32, (g) => { for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) { const d = Math.hypot(x - 15.5, y - 15.5) / 15.5; if (d < 1) { g.fillStyle = `rgba(255,255,255,${Math.pow(1 - d, 1.6) * 0.9})`; g.fillRect(x, y, 1, 1); } } }); t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; return t; })(),
   blob: (() => { const t = tex(16, 16, (g) => { for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) { const d = Math.hypot(x - 7.5, y - 7.5); if (d < 7.5) { g.fillStyle = `rgba(0,0,0,${d < 5 ? .45 : .25})`; g.fillRect(x, y, 1, 1); } } }); t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; return t; })(),
 };
 const M = {
@@ -1062,10 +1164,32 @@ const M = {
   blob: new THREE.MeshBasicMaterial({ map: TEX.blob, transparent: true, depthWrite: false }),
   marker: new THREE.MeshBasicMaterial({ color: 0xffe14a }),
 };
+// night versions of the world textures: keep brightness, shift hue toward blue/violet
+const NTEX = {};
+function nightify(t) {
+  const src = t.image, c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
+  const g = c.getContext('2d'); g.drawImage(src, 0, 0);
+  const d = g.getImageData(0, 0, c.width, c.height), p = d.data;
+  for (let i = 0; i < p.length; i += 4) {
+    const r = p[i], gg = p[i + 1], b = p[i + 2], l = 0.4 * r + 0.45 * gg + 0.15 * b;
+    p[i] = Math.min(255, l * 0.62 + r * 0.22 + 6); p[i + 1] = Math.min(255, l * 0.62 + gg * 0.12 + 4); p[i + 2] = Math.min(255, l * 1.05 + b * 0.2 + 26);
+  }
+  g.putImageData(d, 0, 0);
+  const n = new THREE.CanvasTexture(c); n.wrapS = t.wrapS; n.wrapT = t.wrapT; return n;
+}
+const NIGHTABLE = ['grass', 'grassB', 'grass2', 'dirt', 'dirtDark', 'crate', 'stone', 'rockTop', 'hedge', 'bark', 'leaf', 'slab'];
+function themeMaterials(n) {
+  for (const k of NIGHTABLE) { if (n && !NTEX[k]) NTEX[k] = nightify(TEX[k]); M[k].map = n ? NTEX[k] : TEX[k]; }
+}
 const G = {
   box: new THREE.BoxGeometry(1, 1, 1),
+  plane2: (() => { const g = new THREE.PlaneGeometry(1, 1, 2, 2); g.rotateX(-Math.PI / 2); return g; })(),
   plane: (() => { const g = new THREE.PlaneGeometry(1, 1); g.rotateX(-Math.PI / 2); return g; })(),
 };
+const glowMats = {};
+function glowMat(c, o = 0.75) { const k = c + ':' + o; return glowMats[k] || (glowMats[k] = new THREE.MeshBasicMaterial({ map: TEX.glow, color: c, opacity: o, transparent: true, depthWrite: false, blending: 'add' })); }
+const basicMats = {};
+function basic(c) { return basicMats[c] || (basicMats[c] = new THREE.MeshBasicMaterial({ color: c })); }
 function box(w, h, d, mat, x = 0, y = 0, z = 0, parent) {
   const m = new THREE.Mesh(G.box, mat); m.scale.set(w, h, d); m.position.set(x, y, z);
   if (parent) parent.add(m); return m;
@@ -1075,19 +1199,19 @@ function box(w, h, d, mat, x = 0, y = 0, z = 0, parent) {
 const DOGSPEC = [
   { // Bear: big fluffy black Newfoundland
     S: 1.1, body: 0x1d1c20, chest: 0x252429, head: 0x1f1e22, muzzle: 0x2a292e, nose: 0x0c0c0c, ear: 0x18171b,
-    leg: 0x1d1c20, foot: 0x222126, tail: 0x1d1c20, tip: 0x26252a, eye: 0x4a2a14, ears: 'floppy', bulk: 1.25, collar: 0xb83a3a, fluff: true,
+    leg: 0x1d1c20, foot: 0x222126, tail: 0x1d1c20, tip: 0x26252a, eye: 0x4a2a14, ears: 'floppy', bulk: 1.25, collar: 0xb83a3a, fluff: true, glow: 0x4dff7a,
   },
   { // Louise: scruffy black/grey terrier, white beard, chest and paws, green harness
     S: 0.82, body: 0x2f2f33, chest: 0xe7e3da, head: 0x2f2f33, muzzle: 0xd9d4c8, nose: 0x101010, ear: 0x29292c,
-    leg: 0x2f2f33, foot: 0xe7e3da, tail: 0x2f2f33, tip: 0xbdb8ae, eye: 0x2a1a10, ears: 'fold', bulk: 0.95, harness: 0x2f9e57, brows: 0xc9c4b8, beard: true,
+    leg: 0x2f2f33, foot: 0xe7e3da, tail: 0x2f2f33, tip: 0xbdb8ae, eye: 0x2a1a10, ears: 'fold', bulk: 0.95, harness: 0x2f9e57, brows: 0xc9c4b8, beard: true, glow: 0xff4fd2,
   },
   { // Oatie: scruffy cream-white terrier with champagne ears/head, pink harness
     S: 0.72, body: 0xf1eadc, chest: 0xfbf7ef, head: 0xefe5d2, muzzle: 0xfbf7ef, nose: 0x141414, ear: 0xd8b07a,
-    leg: 0xf1eadc, foot: 0xf6f1e6, tail: 0xf1eadc, tip: 0xe0c49a, eye: 0x2a1a10, ears: 'fold', bulk: 0.95, harness: 0xf06a98, bandana: 0x253064, cap: 0xdcb784, beard: true,
+    leg: 0xf1eadc, foot: 0xf6f1e6, tail: 0xf1eadc, tip: 0xe0c49a, eye: 0x2a1a10, ears: 'fold', bulk: 0.95, harness: 0xf06a98, bandana: 0x253064, cap: 0xdcb784, beard: true, glow: 0xffe23a,
   },
   { // Gerty Boots: small chocolate dog, big upright fluffy ears, tan boots, pink bandana
     S: 0.58, body: 0x4b2a1d, chest: 0x5a3424, head: 0x4b2a1d, muzzle: 0x5d3727, nose: 0x3a201a, ear: 0x4b2a1d,
-    leg: 0x4b2a1d, foot: 0xb57a43, tail: 0x4b2a1d, tip: 0xc89a6a, eye: 0x9a7020, ears: 'up', bulk: 0.9, bandana: 0xe7a3ad, fluffTail: true, earFringe: 0x8a5a3a,
+    leg: 0x4b2a1d, foot: 0xb57a43, tail: 0x4b2a1d, tip: 0xc89a6a, eye: 0x9a7020, ears: 'up', bulk: 0.9, bandana: 0xe7a3ad, fluffTail: true, earFringe: 0x8a5a3a, glow: 0x3ff2ff,
   },
 ];
 
@@ -1107,7 +1231,7 @@ function buildDog(k) {
     box(bw * 1.05, 0.08, bl * 0.8, fur(sp.chest), 0, -bh / 2 - 0.02, 0, bodyG);
   }
   if (sp.harness) { box(bw + 0.03, bh + 0.03, 0.06, col(sp.harness), 0, 0, 0.12, bodyG); box(0.06, 0.04, 0.3, col(sp.harness), 0, bh / 2 + 0.02, 0.0, bodyG); }
-  if (sp.collar) box(0.3, 0.06, 0.24, col(sp.collar), 0, bh * 0.35, bl / 2 + 0.02, bodyG);
+  const dayCollar = sp.collar ? box(0.3, 0.06, 0.24, col(sp.collar), 0, bh * 0.35, bl / 2 + 0.02, bodyG) : null;
   // head
   const neck = new THREE.Group(); neck.position.set(0, legH + bh * 0.85, bl / 2 - 0.02); torso.add(neck);
   const head = new THREE.Group(); head.position.set(0, 0.1, 0.06); neck.add(head);
@@ -1144,6 +1268,12 @@ function buildDog(k) {
     bd.rotation.x = Math.PI; bd.position.set(0, -0.12, 0.13); bd.scale.z = 0.5; neck.add(bd);
     box(0.24, 0.05, 0.2, col(sp.bandana), 0, -0.03, 0.02, neck);
   }
+  // glowing night collar
+  const glowCollar = new THREE.Group(); neck.add(glowCollar); glowCollar.visible = false;
+  box(0.27 * hs, 0.055, 0.25, basic(sp.glow), 0, -0.04, 0.03, glowCollar);
+  box(0.06, 0.06, 0.03, basic(0xffffff), 0, -0.07, 0.16, glowCollar);
+  const glowDisc = new THREE.Mesh(G.plane, glowMat(sp.glow)); glowDisc.scale.set(1.5 + S * 0.5, 1, 1.5 + S * 0.5); glowDisc.renderOrder = 2; glowDisc.visible = false;
+  const light = new THREE.PointLight(sp.glow, 1.1, 2.4);
   // legs
   const legs = [];
   for (const [lx, lz] of [[-1, 1], [1, 1], [-1, -1], [1, -1]]) {
@@ -1162,7 +1292,7 @@ function buildDog(k) {
   // blob shadow
   const shadow = new THREE.Mesh(G.plane, M.blob); shadow.scale.set(0.7 * S * B, 1, 0.95 * S); shadow.renderOrder = 1;
   return {
-    k, root, rig, torso, bodyG, neck, head, jaw, tongue, ears, legs, tail, tailInner, shadow, S,
+    k, root, rig, torso, bodyG, neck, head, muz, jaw, tongue, ears, legs, tail, tailInner, shadow, S, glowCollar, glowDisc, light, dayCollar, fx: 1,
     tailBase: tailInner.rotation.x, headBase: 0,
     backH: () => S * (0.06 + bh), // standing-on-back height when lying
     pos: new THREE.Vector3(), path: [], face: 0, faceT: 0, lie: 0, lieT: 0,
@@ -1198,16 +1328,61 @@ function makeBowl() {
   const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.045), M.marker); star.position.y = 0.45; g.add(star);
   g.userData = { food, star }; return g;
 }
+function makeBone() {
+  const g = new THREE.Group(), inner = new THREE.Group(); g.add(inner);
+  const m = col(0xf3ecd8);
+  box(0.44, 0.1, 0.11, m, 0, 0, 0, inner);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(0.13, 0.13, 0.13, m, sx * 0.25, 0, sz * 0.065, inner);
+  inner.position.y = 0.3;
+  const glow = new THREE.Mesh(G.plane, glowMat(0xfff1b0, 0.8)); glow.scale.set(1.4, 1, 1.4); glow.position.y = 0.02; glow.renderOrder = 2; g.add(glow);
+  const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.045), M.marker); star.position.y = 0.55; g.add(star);
+  g.userData = { bone: inner, star, glow, food: new THREE.Group() }; return g;
+}
+function makeMound() { const m = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 3, 0, Math.PI * 2, 0, Math.PI / 2), M.dirt); m.scale.set(1, 0.01, 1); return m; }
+const FRCOL = [0xff8a1e, 0x2f7dff];
+function makeFrisbee(f) {
+  const g = new THREE.Group();
+  const lit = NIGHT ? basic(FRCOL[f]) : col(FRCOL[f]);
+  const d = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 0.05, 12), lit); d.position.y = 0.03; g.add(d);
+  const r = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.025, 3, 12), NIGHT ? basic(f ? 0x9cc4ff : 0xffd09a) : col(f ? 0x9cc4ff : 0xffd09a)); r.rotation.x = Math.PI / 2; r.position.y = 0.06; g.add(r);
+  const c = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.055, 8), NIGHT ? basic(0xffffff) : col(0xffffff)); c.position.y = 0.035; g.add(c);
+  const glow = new THREE.Mesh(G.plane, glowMat(FRCOL[f])); glow.scale.set(1.1, 1, 1.1); glow.position.y = 0.01; glow.renderOrder = 2; glow.visible = NIGHT; g.add(glow);
+  g.userData = { f, path: [], glow, held: -1 };
+  return g;
+}
+let frisM = [];
 function addObj(o) { scene.add(o); worldObjs.push(o); return o; }
 
-const sky = new THREE.Color(0x8fd0ff);
+const sky = new THREE.Color(0x8fd0ff), nightSky = new THREE.Color(0x150f38);
+let NIGHT = false, fireflies = [];
+function setNight(n) {
+  NIGHT = n; themeMaterials(n);
+  dogsV.forEach(v => { v.glowCollar.visible = n; v.glowDisc.visible = n; if (v.dayCollar) v.dayCollar.visible = !n; });
+}
 function baseScene() {
-  scene = new THREE.Scene();
-  scene.background = sky; scene.fog = new THREE.Fog(0x8fd0ff, 24, 60);
-  scene.add(new THREE.HemisphereLight(0xdff2ff, 0x4a6a2a, 0.75));
-  const sun = new THREE.DirectionalLight(0xfff2d8, 0.75); sun.position.set(-6, 14, 8); scene.add(sun);
+  scene = new THREE.Scene(); fireflies = [];
+  if (NIGHT) {
+    scene.background = nightSky; scene.fog = new THREE.Fog(0x1c1648, 20, 52);
+    scene.add(new THREE.HemisphereLight(0x8a80ee, 0x231848, 0.5));
+    const moon = new THREE.DirectionalLight(0xc0c4ff, 0.34); moon.position.set(5, 12, -6); scene.add(moon);
+    const mm = new THREE.Mesh(new THREE.SphereGeometry(5, 10, 8), new THREE.MeshBasicMaterial({ color: 0xf6f0d2, fog: false })); mm.position.set(-30, 30, -80); scene.add(mm);
+    const halo = new THREE.Mesh(G.plane, new THREE.MeshBasicMaterial({ map: TEX.glow, color: 0x8f88ff, transparent: true, depthWrite: false, blending: 'add', fog: false }));
+    halo.rotation.x = Math.PI / 2; halo.scale.set(34, 1, 34); halo.position.set(-30, 30, -82); scene.add(halo);
+    const starM = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false });
+    for (let i = 0; i < 160; i++) { const a = Math.random() * Math.PI * 2, e = 0.08 + Math.random() * 0.9, r = 90; const s = box(0.35, 0.35, 0.35, starM, Math.cos(a) * Math.cos(e) * r, Math.sin(e) * r * 0.8 + 4, Math.sin(a) * Math.cos(e) * r - 20); s.rotation.set(Math.random(), Math.random(), 0); scene.add(s); }
+    for (let i = 0; i < 26; i++) {
+      const f = new THREE.Mesh(G.plane, glowMat(0xc8ff6a)); f.rotation.x = Math.PI / 2; f.scale.set(0.35, 1, 0.35);
+      const c = box(0.05, 0.05, 0.05, basic(0xeaff9a), 0, 0, 0); f.add(c);
+      f.userData = { x: (Math.random() - .5) * 18, z: (Math.random() - .5) * 18, y: 0.6 + Math.random() * 1.6, ph: Math.random() * 9 };
+      scene.add(f); fireflies.push(f);
+    }
+  } else {
+    scene.background = sky; scene.fog = new THREE.Fog(0x8fd0ff, 24, 60);
+    scene.add(new THREE.HemisphereLight(0xdff2ff, 0x4a6a2a, 0.75));
+    const sun = new THREE.DirectionalLight(0xfff2d8, 0.75); sun.position.set(-6, 14, 8); scene.add(sun);
+  }
   // far meadow + trees
-  const far = new THREE.Mesh(new THREE.PlaneGeometry(140, 140, 35, 35), ps1({ map: TEX.grass2 }));
+  const far = new THREE.Mesh(new THREE.PlaneGeometry(140, 140, 35, 35), M.grass2);
   far.rotation.x = -Math.PI / 2; far.position.y = -1.25;
   const uv = far.geometry.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 70, uv.getY(i) * 70);
   scene.add(far);
@@ -1218,7 +1393,7 @@ function baseScene() {
   }
   // distant hills
   for (let i = 0; i < 9; i++) {
-    const h = new THREE.Mesh(new THREE.SphereGeometry(8 + rnd() * 6, 7, 4, 0, Math.PI * 2, 0, Math.PI / 2), col(0x5b9a48));
+    const h = new THREE.Mesh(new THREE.SphereGeometry(8 + rnd() * 6, 7, 4, 0, Math.PI * 2, 0, Math.PI / 2), col(NIGHT ? 0x3a3a78 : 0x5b9a48));
     h.position.set(-50 + i * 13, -1.3, -42 - rnd() * 8); h.scale.y = 0.5 + rnd() * 0.4; scene.add(h);
   }
 }
@@ -1226,7 +1401,9 @@ function baseScene() {
 function cellPos(i) { return [(i % N) - 7.5, ((i / N) | 0) - 7.5]; }
 
 let LV = null, S0 = null, st = null, history = [], deco = [];
+function clearFrisbees() { frisM.forEach(m => { if (m && m.parent) m.parent.remove(m); }); frisM = []; }
 function buildBoard(lv, s) {
+  clearFrisbees();
   baseScene(); worldObjs = []; crateM = {};
   // board slab
   const slab = new THREE.Mesh(new THREE.BoxGeometry(16.4, 1.25, 16.4), [M.slab, M.slab, null, M.dirt, M.slab, M.slab]);
@@ -1259,13 +1436,15 @@ function buildBoard(lv, s) {
       const h2 = box(0.72, 0.16, 0.72, M.hedge, x + rnd() * .08 - .04, 0.48, z + rnd() * .08 - .04); addObj(h2); h2.rotation.y = rnd() * 0.5;
       continue;
     }
-    const t = new THREE.Mesh(G.plane, ((i % N) + ((i / N) | 0)) % 2 === 0 ? M.grass : M.grassB); t.position.set(x, 0.001, z); addObj(t);
+    const t = new THREE.Mesh(NIGHT ? G.plane2 : G.plane, ((i % N) + ((i / N) | 0)) % 2 === 0 ? M.grass : M.grassB); t.position.set(x, 0.001, z); addObj(t);
     for (let k = 0; k < f; k++) addObj(new THREE.Mesh(G.box, [M.stone, M.stone, k === f - 1 ? M.rockTop : M.stone, M.stone, M.stone, M.stone])).position.set(x, k + 0.5, z);
   }
-  // bowl
-  bowlObj = makeBowl(); const [bx, bz] = cellPos(s.bowl); bowlObj.position.set(bx, s.floor[s.bowl], bz); addObj(bowlObj);
+  // goal: bowl by day, bone by night
+  bowlObj = NIGHT ? makeBone() : makeBowl(); const [bx, bz] = cellPos(s.bowl); bowlObj.position.set(bx, s.floor[s.bowl], bz); addObj(bowlObj);
+  // frisbees
+  frisM = [0, 1].map(f => s.fr[f] === Logic.NONE ? null : makeFrisbee(f));
   // dogs
-  dogsV.forEach(d => { scene.add(d.root); scene.add(d.shadow); });
+  dogsV.forEach(d => { scene.add(d.root); scene.add(d.shadow); scene.add(d.glowDisc); scene.add(d.light); });
   syncAll(s, true);
   frameCamera(lv);
   scene.add(marker);
@@ -1284,11 +1463,17 @@ function syncAll(s, snapDogs) {
       scene.add(m); crateM[i].push(m);
     }
   }
+  // frisbees
+  frisM.forEach((m, f) => {
+    if (!m) return;
+    m.userData.path = [];
+    placeFrisbee(f, s);
+  });
   // dogs
   let bench = 0;
   s.dogs.forEach((d, k) => {
     const v = dogsV[k];
-    v.path = []; v.act = null; v.mood = 'idle';
+    v.path = []; v.act = null; v.mood = 'idle'; v.fx = 1;
     if (!d.active) {
       // sit on the sidelines in the meadow
       const spots = deco.slice().sort((a, b) => benchScore(b) - benchScore(a));
@@ -1301,6 +1486,19 @@ function syncAll(s, snapDogs) {
       v.lie = v.lieT = d.rider >= 0 ? 1 : 0;
     }
   });
+}
+function placeFrisbee(f, s) {
+  const m = frisM[f], v = s.fr[f];
+  if (!m) return;
+  if (v >= 0) {
+    scene.add(m); m.rotation.set(0, 0, 0); m.scale.setScalar(1);
+    const [x, z] = cellPos(v); m.position.set(x, Logic.height(s, v), z); m.userData.held = -1; m.userData.glow.visible = NIGHT;
+  } else holdFrisbee(f, -1 - v);
+}
+function holdFrisbee(f, d) {
+  const m = frisM[f], dv = dogsV[d];
+  dv.muz.add(m); m.userData.held = d; m.userData.glow.visible = false;
+  m.position.set(0, -0.06, 0.2); m.rotation.set(Math.PI / 2 - 0.25, 0, 0); m.scale.setScalar(0.9 / dv.S * 0.75);
 }
 function benchScore(i) { const x = i % N, y = (i / N) | 0; let near = 0; for (const [dx, dy] of DIRS) { const j = (y + dy) * N + x + dx; if (j >= 0 && j < N * N && LV.map[(j / N) | 0][j % N] !== '_') near++; } return y * 2 + near * 3 - Math.abs(x - 7.5) * 0.6; }
 
@@ -1367,10 +1565,11 @@ function woof(v, k) {
 /* ============================== ANIMATION ============================== */
 // path segments: {to:Vector3, dur, arc}
 function pushPath(obj, to, dur, arc = 0) { obj.path.push({ to: to.clone(), dur, arc, t: 0, from: null }); }
-function stepPath(pos, path, dt) {
+function stepPath(pos, path, dt, obj) {
   if (!path.length) return false;
   const seg = path[0];
-  if (!seg.from) seg.from = pos.clone();
+  if (!seg.from) { seg.from = pos.clone(); if (seg.onStart) seg.onStart(); }
+  if (seg.sc && obj) obj.fx = seg.sc[0] + (seg.sc[1] - seg.sc[0]) * Math.min(1, (seg.t + dt) / seg.dur);
   seg.t += dt;
   const u = Math.min(1, seg.t / seg.dur);
   const e = seg.arc < 0 ? u * u : u; // falls accelerate
@@ -1383,13 +1582,13 @@ const busy = () => dogsV.some(v => v.path.length) || Object.values(crateM).some(
 
 const lerpA = (a, b, t) => { let d = b - a; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return a + d * t; };
 function animDog(v, dt, T) {
-  const moving = stepPath(v.pos, v.path, dt);
+  const moving = stepPath(v.pos, v.path, dt, v);
   v.face = lerpA(v.face, v.faceT, Math.min(1, dt * 14));
   v.lie += (v.lieT - v.lie) * Math.min(1, dt * 9);
   v.root.position.copy(v.pos); v.root.rotation.set(0, v.face, 0);
   const ph = T * 1 + v.phase;
   // reset pose
-  v.rig.position.set(0, 0, 0); v.rig.rotation.set(0, 0, 0);
+  v.rig.position.set(0, 0, 0); v.rig.rotation.set(0, (1 - v.fx) * 9, 0); v.rig.scale.setScalar(v.S * v.fx);
   v.head.rotation.set(0, 0, 0); v.neck.rotation.set(0, 0, 0); v.jaw.rotation.x = 0; v.tongue.visible = false;
   v.bodyG.scale.set(1, 1, 1); v.torso.position.set(0, 0, 0); v.torso.rotation.set(0, 0, 0);
   const breath = Math.sin(ph * 2.4) * 0.03;
@@ -1433,6 +1632,15 @@ function animDog(v, dt, T) {
   if (v.mood === 'eat') {
     v.neck.rotation.x = 0.9 + Math.sin(T * 10) * 0.12; v.jaw.rotation.x = Math.abs(Math.sin(T * 10)) * 0.4; wagSpeed = 22; wagAmp = 0.7;
     v.legs.forEach((p, i) => p.rotation.x = i < 2 ? 0.15 : 0);
+  } else if (v.mood === 'bury') {
+    const a = v.buryT || 0;
+    if (a < 1.6 || v.buryLoop) { // dig: front paws paddle fast, nose down
+      v.torso.rotation.x = 0.28; v.neck.rotation.x = 0.5;
+      v.legs[0].rotation.x = -0.6 + Math.sin(T * 26) * 0.9; v.legs[1].rotation.x = -0.6 - Math.sin(T * 26) * 0.9;
+      v.legs[2].rotation.x = v.legs[3].rotation.x = -0.25; wagSpeed = 24; wagAmp = 0.8;
+    } else if (a < 2.3) { // nose-push the dirt over
+      const u = (a - 1.6) / 0.7; v.neck.rotation.x = 0.8 * Math.sin(u * Math.PI * 2) * 0.6 + 0.4; v.torso.rotation.x = 0.15;
+    } else { v.tongue.visible = true; v.jaw.rotation.x = 0.4; v.rig.position.y = Math.abs(Math.sin(T * 6)) * 0.12; wagSpeed = 24; wagAmp = 0.9; }
   } else if (v.mood === 'party') {
     const c = (T * 1.3 + v.phase) % 2.4;
     if (c < 0.5) { v.rig.position.y = Math.sin(c / 0.5 * Math.PI) * 0.35; v.torso.rotation.x = -0.3 * Math.sin(c / 0.5 * Math.PI); }
@@ -1444,6 +1652,12 @@ function animDog(v, dt, T) {
   v.tail.rotation.y = Math.sin(T * wagSpeed + v.phase) * wagAmp;
   v.tailInner.rotation.x = v.tailBase;
   v.ears.forEach((e, i) => { if (DOGSPEC[v.k].ears !== 'up') e.rotation.x = Math.sin(T * 3 + i) * 0.08 + (moving ? 0.3 : 0); });
+  // night glow follows the dog
+  if (NIGHT) {
+    v.glowDisc.position.set(v.pos.x, shadowY(v) + 0.02, v.pos.z);
+    v.light.position.set(v.pos.x, v.pos.y + 0.55, v.pos.z);
+    v.light.intensity = 1.0 + Math.sin(T * 2.2 + v.phase) * 0.1;
+  } else v.light.intensity = 0;
   // shadow
   v.shadow.visible = !v.bench || true;
   v.shadow.position.set(v.pos.x, shadowY(v) + 0.012, v.pos.z);
@@ -1465,18 +1679,21 @@ function activeDogs() { return st.dogs.map((d, k) => d.active ? k : -1).filter(k
 
 function loadLevel(n) {
   game.level = n; LV = LEVELS[n]; S0 = Logic.parse(LV); st = Logic.clone(S0); history = [];
+  setNight(!!LV.night); Audio.setTheme(LV.night ? 'night' : 'day');
   game.mode = 'play'; game.queue = []; game.winner = -1;
   const startK = DOGS.findIndex(d => d.key === LV.start);
   game.sel = st.dogs[startK] && st.dogs[startK].active ? startK : activeDogs()[0];
   buildBoard(LV, st);
   confetti.forEach(c => scene.remove(c.m)); confetti = [];
   showHUD(true);
-  $('lvlnum').textContent = 'LEVEL ' + (n + 1);
+  $('lvlnum').textContent = LV.night ? '\u263E NIGHT ' + (n - 19) + '  \u00b7  LEVEL ' + (n + 1) : '\u2600 LEVEL ' + (n + 1);
+  $('keys').innerHTML = 'ARROWS move<br>SPACE switch dog' + (LV.night ? '<br>&nbsp;(drops frisbee)' : '') + '<br>Z undo &middot; R restart<br>H hint &middot; ESC pause';
+  document.body.classList.toggle('night', !!LV.night);
   $('lvlname').textContent = LV.name;
   $('hint').innerHTML = LV.hint;
   $('hintbox').classList.remove('hide');
   updateDogBar();
-  showCard('LEVEL ' + (n + 1), LV.name);
+  showCard((LV.night ? 'NIGHT ' + (n - 19) : 'LEVEL ' + (n + 1)), LV.name);
   try { localStorage.setItem('loq_code', CODES[n + 1]); } catch (e) {}
 }
 function showCard(a, b) {
@@ -1489,8 +1706,10 @@ function updateDogBar() {
     if (!st.dogs[k].active) return;
     const el = document.createElement('div'); el.className = 'dogchip' + (k === game.sel ? ' sel' : '');
     const sp = DOGSPEC[k];
-    el.innerHTML = `<span class="sw" style="background:#${sp.body.toString(16).padStart(6, '0')};border-color:#${(sp.ears === 'up' ? sp.foot : sp.ear).toString(16).padStart(6, '0')}"></span>${d.name}`;
-    el.onclick = () => { if (game.mode === 'play') { game.sel = k; Audio.sfx.sw(k); updateDogBar(); } };
+    const hx = c => '#' + c.toString(16).padStart(6, '0');
+    const hold = Logic.holding(st, k);
+    el.innerHTML = `<span class="sw" style="background:${hx(sp.body)};border-color:${NIGHT ? hx(sp.glow) : hx(sp.ears === 'up' ? sp.foot : sp.ear)}${NIGHT ? ';box-shadow:0 0 8px ' + hx(sp.glow) : ''}"></span>${d.name}${hold >= 0 ? ` <span class="fz" style="background:${hx(FRCOL[hold])}"></span>` : ''}`;
+    el.onclick = () => { if (game.mode === 'play' && k !== game.sel) { selectDog(k); } };
     bar.appendChild(el);
   });
 }
@@ -1511,7 +1730,9 @@ function doMove(dir) {
   }
   history.push(before);
   const D = st.dogs[d];
-  const [tx, tz] = cellPos(D.i);
+  for (const dr of (ev.drops || [])) animDrop(dr);
+  const tCell = ev.teleport ? ev.teleport.from : D.i;
+  const [tx, tz] = cellPos(tCell);
   if (ev.dismount >= 0) { dogsV[ev.dismount].lieT = 0; }
   if (ev.push) {
     const p = ev.push, moved = crateM[p.from].splice(crateM[p.from].length - p.k, p.k);
@@ -1524,6 +1745,10 @@ function doMove(dir) {
       P.push({ to: new THREE.Vector3(ux, p.fromBase + j + 0.5, uz), dur: 0.2, arc: 0, t: 0 });
       if (dropH > 0) P.push({ to: new THREE.Vector3(ux, p.toBase + j + 0.5, uz), dur: 0.12 + 0.07 * dropH, arc: -1, t: 0 });
     });
+    if (p.fris >= 0 && frisM[p.fris]) {
+      const fm = frisM[p.fris]; fm.userData.path = [{ to: new THREE.Vector3(ux, p.fromBase + p.k, uz), dur: 0.2, arc: 0, t: 0 }];
+      if (dropH > 0) fm.userData.path.push({ to: new THREE.Vector3(ux, p.toBase + p.k, uz), dur: 0.12 + 0.07 * dropH, arc: -1, t: 0 });
+    }
     for (const r of p.riders) {
       const rv = dogsV[r], back = st.dogs[r].ride >= 0 ? dogsV[st.dogs[r].ride].backH() : 0;
       pushPath(rv, new THREE.Vector3(ux, p.fromBase + p.k + back, uz), 0.2);
@@ -1532,7 +1757,7 @@ function doMove(dir) {
     Audio.sfx.push();
     if (dropH > 0) setTimeout(() => Audio.sfx.drop(), 150);
   }
-  const yTo = D.lvl + (D.ride >= 0 ? dogsV[D.ride].backH() : 0);
+  const yTo = ev.teleport ? Logic.height(before, ev.teleport.from) : D.lvl + (D.ride >= 0 ? dogsV[D.ride].backH() : 0);
   const dy = yTo - v.pos.y;
   if (ev.mount >= 0) { dogsV[ev.mount].lieT = 1; Audio.sfx.climb(); setTimeout(() => Audio.sfx.lie(), 60); }
   else if (dy > 0.2) Audio.sfx.climb();
@@ -1541,22 +1766,67 @@ function doMove(dir) {
     const mid = new THREE.Vector3(tx, v.pos.y, tz).lerp(v.pos, 0.35);
     pushPath(v, mid, 0.1, 0.15); pushPath(v, new THREE.Vector3(tx, yTo, tz), 0.1 + 0.05 * -dy, -1);
   } else pushPath(v, new THREE.Vector3(tx, yTo, tz), ev.push ? 0.2 : 0.17, dy > 0.2 ? 0.35 + dy * 0.4 : (ev.mount >= 0 ? 0.3 : 0.07));
+  if (ev.pickup >= 0) {
+    const f = ev.pickup; v.path[v.path.length - 1].onEnd = () => { holdFrisbee(f, d); Audio.sfx.pickup(); updateDogBar(); };
+    flashOnce('fris', DOGS[d].name + ' grabbed the ' + Logic.FRIS[f] + ' frisbee! Press SPACE to drop it.');
+  }
+  if (ev.teleport) {
+    const tp = ev.teleport, [ex, ez] = cellPos(tp.to);
+    const yEnd = st.dogs[d].lvl + (st.dogs[d].ride >= 0 ? dogsV[st.dogs[d].ride].backH() : 0);
+    const fIn = frisM[tp.f], fOut = frisM[1 - tp.f];
+    v.path.push({ to: new THREE.Vector3(tx, yTo - 0.15, tz), dur: 0.32, arc: 0, t: 0, sc: [1, 0.05], onStart: () => { Audio.sfx.teleIn(); sparkle(fIn.position, FRCOL[tp.f], 14); fIn.userData.wob = 1; } });
+    v.path.push({ to: new THREE.Vector3(ex, yEnd - 0.2, ez), dur: 0.12, arc: 0, t: 0, sc: [0.05, 0.05] });
+    v.path.push({ to: new THREE.Vector3(ex, yEnd, ez), dur: 0.34, arc: 0.55, t: 0, sc: [0.05, 1], onStart: () => { Audio.sfx.teleOut(); sparkle(fOut.position, FRCOL[1 - tp.f], 18); fOut.userData.wob = 1; } });
+    if (tp.mount >= 0) v.path[v.path.length - 1].onEnd = () => { dogsV[tp.mount].lieT = 1; Audio.sfx.lie(); };
+  }
   const w = Logic.won(st);
   if (w >= 0) { game.mode = 'winwait'; game.winner = w; game.winT = 0; }
+}
+const flashed = {};
+function flashOnce(k, msg) { if (flashed[k + game.level]) return; flashed[k + game.level] = 1; flash(msg); }
+function animDrop(dr) {
+  const m = frisM[dr.f]; if (!m) return;
+  const [x, z] = cellPos(dr.cell);
+  scene.add(m); m.rotation.set(0, 0, 0); m.scale.setScalar(1); m.userData.held = -1; m.userData.glow.visible = NIGHT;
+  const dv = dogsV[dr.dog];
+  m.position.set(x, dv.pos.y + 0.45 * dv.S, z);
+  m.userData.path = [{ to: new THREE.Vector3(x, Logic.height(st, dr.cell), z), dur: 0.22, arc: -1, t: 0 }];
+  Audio.sfx.fdrop();
+}
+function selectDog(k) {
+  const h = Logic.holding(st, game.sel);
+  if (h >= 0) { const before = Logic.clone(st); const e = Logic.drop(st, game.sel); if (e) { history.push(before); animDrop(e.drop); } }
+  game.sel = k; Audio.sfx.sw(k); updateDogBar();
+  const v = dogsV[k]; if (!v.path.length && v.lie < 0.1 && v.mood === 'idle') { v.act = 'hop'; v.actT = 0; }
+}
+const sparks = [];
+function sparkle(p, c, n) {
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(G.plane, glowMat(c)); m.rotation.x = Math.PI / 2; m.scale.set(0.22, 1, 0.22); m.position.set(p.x, p.y + 0.1, p.z); scene.add(m);
+    sparks.push({ m, v: new THREE.Vector3((Math.random() - .5) * 2.4, 1.5 + Math.random() * 2.5, (Math.random() - .5) * 2.4), life: 0.6 + Math.random() * 0.4 });
+  }
+}
+function dirt(p, n, dir) {
+  for (let i = 0; i < n; i++) {
+    const m = box(0.07, 0.07, 0.07, M.dirt, p.x, p.y + 0.1, p.z); scene.add(m);
+    sparks.push({ m, v: new THREE.Vector3(-Math.sin(dir) * (1.5 + Math.random() * 2) + (Math.random() - .5), 1.5 + Math.random() * 2, -Math.cos(dir) * (1.5 + Math.random() * 2) + (Math.random() - .5)), life: 0.7, solid: true });
+  }
 }
 function flash(msg) { const f = $('flash'); f.textContent = msg; f.classList.remove('show'); void f.offsetWidth; f.classList.add('show'); }
 
 function undo() {
   if (!history.length) return;
-  st = history.pop(); syncAll(st); Audio.sfx.undo();
+  st = history.pop(); syncAll(st); Audio.sfx.undo(); updateDogBar();
   if (!st.dogs[game.sel].active) game.sel = activeDogs()[0];
 }
-function restart() { st = Logic.clone(S0); history = []; syncAll(st); Audio.sfx.undo(); }
+function restart() { st = Logic.clone(S0); history = []; syncAll(st); Audio.sfx.undo(); updateDogBar(); }
 function switchDog(dirn = 1) {
-  const a = activeDogs(); if (a.length < 2) { Audio.sfx.blocked(); return; }
-  game.sel = a[(a.indexOf(game.sel) + dirn + a.length) % a.length];
-  Audio.sfx.sw(game.sel); updateDogBar();
-  const v = dogsV[game.sel]; if (!v.path.length && v.lie < 0.1) { v.act = 'hop'; v.actT = 0; }
+  const a = activeDogs();
+  if (a.length < 2) { // lone dog: space still drops a frisbee
+    if (Logic.holding(st, game.sel) >= 0) selectDog(game.sel); else Audio.sfx.blocked();
+    return;
+  }
+  selectDog(a[(a.indexOf(game.sel) + dirn + a.length) % a.length]);
 }
 
 function startCelebration() {
@@ -1564,10 +1834,14 @@ function startCelebration() {
   const w = game.winner, v = dogsV[w];
   // eater stands behind the bowl
   const [bx, bz] = cellPos(st.bowl);
-  v.mood = 'eat';
+  v.mood = NIGHT ? 'bury' : 'eat'; v.buryT = 0; v.buryLoop = false;
   v.pos.set(bx - Math.sin(v.faceT) * 0.32 * v.S * 1.3, v.pos.y, bz - Math.cos(v.faceT) * 0.32 * v.S * 1.3);
+  if (NIGHT) { // bone drops to the ground in front of the dog
+    bowlObj.userData.bone.position.y = 0.06; bowlObj.userData.bone.rotation.set(0, v.faceT + Math.PI / 2, 0);
+    game.mound = makeMound(); game.mound.position.copy(bowlObj.position); scene.add(game.mound);
+  }
   dogsV.forEach((o, k) => { if (k !== w) { o.mood = 'party'; o.phase = Math.random() * 3; if (st.dogs[k].rider >= 0) o.mood = 'idle'; } });
-  Audio.sfx.win();
+  if (NIGHT) Audio.sfx.bury(); else Audio.sfx.win();
   spawnConfetti(st.bowl, 70);
   marker.visible = false;
 }
@@ -1583,7 +1857,8 @@ function spawnConfetti(i, n) {
 
 function levelCleared() {
   const n = game.level;
-  if (n === LEVELS.length - 1) { game.mode = 'toending'; try { localStorage.removeItem('loq_code'); } catch (e) {} setTimeout(startEnding, 900); return; }
+  if (n === LEVELS.length - 1) { game.mode = 'toending'; try { localStorage.removeItem('loq_code'); } catch (e) {} setTimeout(() => startEnding('night'), 900); return; }
+  if (n === 19) { game.mode = 'toending'; try { localStorage.setItem('loq_code', CODES[21]); } catch (e) {} setTimeout(() => startEnding('day'), 900); return; }
   game.mode = 'cleared';
   $('clearcode').textContent = CODES[n + 2]; $('hintbox').classList.add('hide');
   $('clear').classList.add('show');
@@ -1594,7 +1869,7 @@ function nextLevel() { $('clear').classList.remove('show'); loadLevel(game.level
 /* ---------- title & ending scenes ---------- */
 function showHUD(on) { $('hud').classList.toggle('hide', !on); }
 function titleScene() {
-  game.mode = 'title'; showHUD(false); camFit = null;
+  game.mode = 'title'; showHUD(false); camFit = null; clearFrisbees(); setNight(false); Audio.setTheme('day'); document.body.classList.remove('night');
   LV = { map: Array(16).fill('_'.repeat(16)) }; st = null; deco = [];
   baseScene();
   const slab = new THREE.Mesh(new THREE.BoxGeometry(16.4, 1.25, 16.4), [M.slab, M.slab, null, M.dirt, M.slab, M.slab]); slab.position.y = -0.63; scene.add(slab);
@@ -1619,8 +1894,10 @@ function titleScene() {
   $('lastcode').textContent = saved && saved !== CODES[1] ? 'Last code: ' + saved : '';
   setMenu(0);
 }
-function startEnding() {
-  game.mode = 'ending'; showHUD(false); camFit = null;
+function startEnding(kind = 'night') {
+  game.mode = 'ending'; game.endKind = kind; showHUD(false); camFit = null; clearFrisbees();
+  setNight(kind === 'night'); Audio.setTheme(kind === 'night' ? 'night' : 'day');
+  document.body.classList.toggle('night', kind === 'night');
   baseScene(); st = null; LV = { map: Array(16).fill('_'.repeat(16)) };
   const slab = new THREE.Mesh(new THREE.BoxGeometry(16.4, 1.25, 16.4), [M.slab, M.slab, null, M.dirt, M.slab, M.slab]); slab.position.y = -0.63; scene.add(slab);
   { const top = new THREE.Mesh(new THREE.PlaneGeometry(16.4, 16.4, 16, 16), M.grass); top.rotation.x = -Math.PI / 2; const u = top.geometry.attributes.uv; for (let i = 0; i < u.count; i++) u.setXY(i, u.getX(i) * 16, u.getY(i) * 16); scene.add(top); }
@@ -1629,15 +1906,24 @@ function startEnding() {
   // big pile of crates as a stage backdrop
   for (const [x, z, n] of [[-3, -3, 4], [-2, -3, 3], [-1, -3, 2], [1, -3, 2], [2, -3, 3], [3, -3, 4]])
     for (let j = 0; j < n; j++) { const m = newCrate(); m.scale.setScalar(0.96); m.position.set(x, j + 0.5, z); scene.add(m); }
-  game.endBowls = [];
+  game.endBowls = []; game.endMounds = [];
   dogsV.forEach((v, k) => {
     const a = k / 4 * Math.PI * 2 + Math.PI / 4, r = 1.6;
-    const b = makeBowl(); b.position.set(Math.cos(a) * r * 0.55, 0, Math.sin(a) * r * 0.55); scene.add(b); game.endBowls.push(b);
+    const bp = new THREE.Vector3(Math.cos(a) * r * 0.55, 0, Math.sin(a) * r * 0.55);
+    if (kind === 'night') {
+      const b = makeBone(); b.position.copy(bp); b.userData.bone.position.y = 0.05; b.userData.bone.rotation.y = a; b.userData.star.visible = false; scene.add(b); game.endBowls.push(b);
+      const mnd = makeMound(); mnd.position.copy(bp); scene.add(mnd); game.endMounds.push(mnd);
+    } else { const b = makeBowl(); b.position.copy(bp); scene.add(b); game.endBowls.push(b); }
     v.pos.set(Math.cos(a) * r, 0, Math.sin(a) * r);
     v.face = v.faceT = Math.atan2(-Math.cos(a), -Math.sin(a));
-    v.mood = 'eat'; v.path = []; v.lie = v.lieT = 0; v.phase = k; v.bench = false;
-    scene.add(v.root); scene.add(v.shadow);
+    v.mood = kind === 'night' ? 'bury' : 'eat'; v.buryLoop = true; v.buryT = 0; v.path = []; v.lie = v.lieT = 0; v.phase = k; v.bench = false; v.fx = 1;
+    scene.add(v.root); scene.add(v.shadow); scene.add(v.glowDisc); scene.add(v.light);
   });
+  $('endtitle').textContent = kind === 'night' ? 'THE END!' : 'DAYTIME COMPLETE!';
+  $('endtext').innerHTML = kind === 'night'
+    ? 'All forty levels done! <b>Bear</b>, <b>Louise</b>, <b>Oatie</b> &amp; <b>Gerty Boots</b><br>buried every last bone under the moon. Thanks for playing!'
+    : 'Twenty bowls, licked clean! <b>Bear</b>, <b>Louise</b>, <b>Oatie</b> &amp; <b>Gerty Boots</b> are full...<br>but the sun is setting, and the night stages are calling. Night code: <b class="nc">' + CODES[21] + '</b>';
+  $('endbtn').textContent = kind === 'night' ? 'BACK TO TITLE' : 'CONTINUE TO NIGHT \u25b6';
   camTarget.set(0, 0.1, 1.3); camDist = 8.5; camPitch = 0.6; window.__yaw = null;
   $('ending').classList.add('show'); $('clear').classList.remove('show');
   marker.visible = false;
@@ -1677,7 +1963,7 @@ addEventListener('keydown', e => {
     return;
   }
   if (game.mode === 'cleared') { if (k === 'Enter' || k === ' ') nextLevel(); return; }
-  if (game.mode === 'ending') { if ((k === 'Enter' || k === ' ') && game.endT > 3) titleScene(); return; }
+  if (game.mode === 'ending') { if ((k === 'Enter' || k === ' ') && game.endT > 3) endContinue(); return; }
   if (game.mode === 'pause') {
     if (k === 'Escape') togglePause();
     if (k === 'q' || k === 'Q') { togglePause(); titleScene(); }
@@ -1709,6 +1995,14 @@ function frame() {
   const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000); last = now; T += dt;
   processQueue();
   for (const k in crateM) for (const m of crateM[k]) stepPath(m.position, m.userData.path, dt);
+  for (const m of frisM) if (m && m.userData.held < 0) {
+    stepPath(m.position, m.userData.path, dt);
+    if (m.userData.wob > 0) { m.userData.wob = Math.max(0, m.userData.wob - dt * 1.5); m.rotation.z = Math.sin(T * 30) * 0.25 * m.userData.wob; m.position.y += 0; }
+    m.userData.glow.scale.setScalar(1.0 + Math.sin(T * 3 + m.userData.f) * 0.1); m.userData.glow.scale.y = 1;
+  }
+  for (const f of fireflies) { const u = f.userData; f.position.set(u.x + Math.sin(T * 0.4 + u.ph) * 1.5, u.y + Math.sin(T * 1.3 + u.ph) * 0.3, u.z + Math.cos(T * 0.33 + u.ph) * 1.5); const b = 0.6 + 0.4 * Math.sin(T * 3 + u.ph * 3); f.scale.set(0.35 * b, 1, 0.35 * b); }
+  for (let i = sparks.length - 1; i >= 0; i--) { const s = sparks[i]; s.v.y -= 7 * dt; s.m.position.addScaledVector(s.v, dt); s.life -= dt; if (!s.solid) { const k = Math.max(0.01, s.life); s.m.scale.set(0.22 * k * 1.5, 1, 0.22 * k * 1.5); } if (s.life < 0) { scene.remove(s.m); sparks.splice(i, 1); } }
+  if (bowlObj && bowlObj.userData.bone && game.mode !== 'win') { const b = bowlObj.userData.bone; b.rotation.y += dt * 1.2; b.position.y = 0.3 + Math.sin(T * 2.5) * 0.06; }
   dogsV.forEach(v => animDog(v, dt, T));
   if (bowlObj) { bowlObj.userData.star.rotation.y += dt * 3; bowlObj.userData.star.position.y = 0.45 + Math.sin(T * 3) * 0.06; }
   if (game.mode === 'play' || game.mode === 'winwait') {
@@ -1718,18 +2012,33 @@ function frame() {
   if (game.mode === 'winwait' && !busy()) { game.winT += dt; if (game.winT > 0.15) startCelebration(); }
   if (game.mode === 'win') {
     game.winT += dt;
-    bowlObj.userData.food.scale.setScalar(Math.max(0.05, 1 - game.winT / 3));
-    if (Math.floor(game.winT * 3) !== Math.floor((game.winT - dt) * 3) && game.winT < 3) Audio.sfx.crunch();
+    if (NIGHT) {
+      const v = dogsV[game.winner]; v.buryT = game.winT; const a = game.winT;
+      if (a < 1.6 && Math.floor(a * 6) !== Math.floor((a - dt) * 6)) { Audio.sfx.dig(); dirt(bowlObj.position, 4, v.face); }
+      const b = bowlObj.userData.bone, u = Math.min(1, Math.max(0, (a - 0.6) / 1.2));
+      b.position.y = 0.06 - u * 0.3; bowlObj.userData.glow.scale.set(1.3 * (1 - u) + 0.01, 1, 1.3 * (1 - u) + 0.01);
+      if (game.mound) game.mound.scale.y = Math.min(0.55, Math.max(0.01, (a - 0.9) / 1.0 * 0.55));
+      bowlObj.userData.star.visible = a < 0.6;
+    } else {
+      bowlObj.userData.food.scale.setScalar(Math.max(0.05, 1 - game.winT / 3));
+      if (Math.floor(game.winT * 3) !== Math.floor((game.winT - dt) * 3) && game.winT < 3) Audio.sfx.crunch();
+    }
     if (game.winT > 0.9 && game.winT - dt <= 0.9) spawnConfetti(st.bowl, 50);
-    if (game.winT > 2.6) levelCleared();
+    if (game.winT > (NIGHT ? 3.1 : 2.6)) levelCleared();
   }
   if (window.__yaw != null) camYaw = window.__yaw; else if (game.mode === 'title') { camYaw = Math.sin(T * 0.12) * 0.35; }
   else if (game.mode === 'ending') {
     game.endT += dt; camYaw = T * 0.2;
-    game.endBowls.forEach((b, k) => { b.userData.food.scale.setScalar(0.6 + 0.4 * Math.abs(Math.sin(T * 0.3 + k))); });
+    if (game.endKind === 'night') {
+      game.endBowls.forEach((b, k) => { const c = (T * 0.35 + k * 0.25) % 1; b.userData.bone.position.y = 0.05 - Math.min(1, c * 1.6) * 0.28; game.endMounds[k].scale.y = Math.min(0.5, c * 0.9) + 0.01; if (Math.random() < dt * 5) dirt(b.position, 2, dogsV[k].face); });
+      if (Math.floor(game.endT * 2.5) !== Math.floor((game.endT - dt) * 2.5) && Math.random() < 0.5) Audio.sfx.dig();
+      if (Math.random() < dt * 3) { const k = Math.random() * 4 | 0; sparkle(dogsV[k].pos, DOGSPEC[k].glow, 3); }
+    } else {
+      game.endBowls.forEach((b, k) => { b.userData.food.scale.setScalar(0.6 + 0.4 * Math.abs(Math.sin(T * 0.3 + k))); });
+      if (Math.floor(game.endT * 2.5) !== Math.floor((game.endT - dt) * 2.5)) Audio.sfx.crunch();
+    }
     if (Math.random() < dt * 8) spawnConfetti(null, 3);
     if (Math.random() < dt * 0.6) { const k = Math.random() * 4 | 0; Audio.sfx.bark(k, 0.4); woof(dogsV[k], k); }
-    if (Math.floor(game.endT * 2.5) !== Math.floor((game.endT - dt) * 2.5)) Audio.sfx.crunch();
   } else camYaw = 0;
   for (let i = confetti.length - 1; i >= 0; i--) {
     const c = confetti[i]; c.v.y -= 6 * dt; c.v.multiplyScalar(0.985); c.m.position.addScaledVector(c.v, dt);
@@ -1747,7 +2056,8 @@ game.frame = () => {};
 document.querySelectorAll('#menu .mi').forEach((el, i) => { el.onmouseenter = () => setMenu(i); el.onclick = () => { setMenu(i); menuGo(); }; });
 $('codeok').onclick = submitCode; $('codeback').onclick = closeCode;
 $('clearbtn').onclick = nextLevel;
-$('endbtn').onclick = () => titleScene();
+$('endbtn').onclick = () => endContinue();
+function endContinue() { $('ending').classList.remove('show'); if (game.endKind === 'day') loadLevel(20); else titleScene(); }
 $('p_resume').onclick = togglePause; $('p_restart').onclick = () => { togglePause(); restart(); }; $('p_quit').onclick = () => { togglePause(); titleScene(); };
 $('mute').onclick = () => { const mu = Audio.toggleMute(); $('mute').textContent = mu ? '♪ OFF' : '♪ ON'; };
 document.querySelectorAll('[data-k]').forEach(b => {
@@ -1760,12 +2070,12 @@ addEventListener('pointerdown', () => { Audio.init(); if (game.mode === 'title')
 if (matchMedia('(pointer: coarse)').matches) document.body.classList.add('touch');
 
 dogsV = [0, 1, 2, 3].map(buildDog);
-$('keys').innerHTML = 'ARROWS move<br>SPACE switch dog<br>Z undo &middot; R restart<br>H hint &middot; ESC pause';
+$('keys').innerHTML = 'ARROWS move<br>SPACE switch dog<br>&nbsp;(drops frisbee)<br>Z undo &middot; R restart<br>H hint &middot; ESC pause';
 addEventListener('resize', resize);
 resize();
 titleScene();
 requestAnimationFrame(frame);
-window.__game = { dbg: () => ({ camDist, t: [camTarget.x, camTarget.y, camTarget.z], fit: camFit, asp: camera.aspect, pitch: camPitch }), busy, cam: (x, y, z, d, p, yaw) => { camTarget.set(x, y, z); camDist = d; camPitch = p; window.__yaw = yaw; }, dogsV, game, get st() { return st; }, loadLevel, doMove, switchDog, undo, restart, Logic, titleScene, startEnding };
+window.__game = { play: (d, dir) => { if (dir === 4) { selectDog(d); return; } if (d !== game.sel) selectDog(d); doMove(dir); }, setNight, dbg: () => ({ camDist, t: [camTarget.x, camTarget.y, camTarget.z], fit: camFit, asp: camera.aspect, pitch: camPitch }), busy, cam: (x, y, z, d, p, yaw) => { camTarget.set(x, y, z); camDist = d; camPitch = p; window.__yaw = yaw; }, dogsV, game, get st() { return st; }, loadLevel, doMove, switchDog, undo, restart, Logic, titleScene, startEnding };
 })();
 </script>
 </body>
